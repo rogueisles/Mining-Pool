@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "servicesChanged": false,
+  "liveWalletUsed": false,
+  "binaryMatchesQualifiedProductionCore": true,
+  "binarySHA256": "1af46493df5cd540d9a0adf532af207a477f415a05d10a099c7e59b02e1e8fdb",
+  "coreRaceSuitePassed": true,
+  "modulesVerified": true
+}

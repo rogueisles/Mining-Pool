@@ -1,0 +1,42 @@
+{
+  "chainId": 70088,
+  "networkId": 70088,
+  "activationHeight": 1100100,
+  "genesisHash": "0xdc4d38c0ef41d3fdf50642fdf5fc99e221eadd09e73bbe616724f55a136270ab",
+  "nodeSourceCommit": "18367e0aea25899af7fe8d608f0a19fa420740a9",
+  "templateQuorum": 2,
+  "templateSigners": [
+    {
+      "name": "signer1",
+      "url": "https://signer1.rogueisles.com/v4/sign",
+      "address": "0xb00127ba6f96b6bbb32c96a8f74de40b1de1de30",
+      "timeout": "8s"
+    },
+    {
+      "name": "signer2",
+      "url": "https://signer2.rogueisles.com/v4/sign",
+      "address": "0xd8dbe2efb89f2873986bce6d826aa6f417c5cb03",
+      "timeout": "8s"
+    },
+    {
+      "name": "signer3",
+      "url": "https://signer3.rogueisles.com/v4/sign",
+      "address": "0x27f0e3e0060bb18fe4edc0059f67ae568aefdce3",
+      "timeout": "8s"
+    },
+    {
+      "name": "signer4",
+      "url": "https://signer4.rogueisles.com/v4/sign",
+      "address": "0x282390aad1587182d2ecd852f923267d58c4fc14",
+      "timeout": "8s"
+    }
+  ],
+  "payoutScripts": {
+    "digibyte": "0014706267a5255e3666936bcb9a777667599f387546",
+    "dogecoin": "76a9144b1508ebe06723842994adf33bdba36b4eba44c488ac"
+  },
+  "nativeGenesis": {
+    "digibyte": "7497ea1b465eb39f1c8f507bc877078fe016d6fcb6dfad3a64c98dcc6e1e8496",
+    "dogecoin": "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691"
+  }
+}

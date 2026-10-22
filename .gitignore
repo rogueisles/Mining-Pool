@@ -1,0 +1,19 @@
+/open-progpow-pool
+/config.json
+/config*.json
+*.bak*
+build/_workspace/
+build/bin/
+
+# Public reference kit: runtime material stays outside Git.
+/private/
+/build/
+__pycache__/
+*.pyc
+*.key
+*.pem
+*.rdb
+*.aof
+*.log
+/website/dist/
+/website/state/

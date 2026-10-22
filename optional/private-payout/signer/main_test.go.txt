@@ -1,0 +1,164 @@
+package main
+import(
+ "bytes"
+ "context"
+ "crypto/sha256"
+ "encoding/json"
+ "io/ioutil"
+ "net"
+ "net/http"
+ "net/http/httptest"
+ "os"
+ "path/filepath"
+ "strings"
+ "sync"
+ "testing"
+ "time"
+
+ "github.com/TeamEGEM/go-egem/common/hexutil"
+ "github.com/TeamEGEM/go-egem/core/types"
+ "github.com/TeamEGEM/go-egem/crypto"
+ "github.com/TeamEGEM/go-egem/rlp"
+)
+type backend struct {mu sync.Mutex;overrides map[string]interface{};state string;sent int;tx *types.Transaction;failSend bool;autoReceipt bool}
+func(b *backend)ServeHTTP(w http.ResponseWriter,r *http.Request){
+ b.mu.Lock();defer b.mu.Unlock()
+ var q struct{Method string `json:"method"`;Params []json.RawMessage `json:"params"`};json.NewDecoder(r.Body).Decode(&q)
+ var value interface{}
+ switch q.Method{
+ case "net_version":value="70088"
+ case "eth_getBlockByNumber":value=map[string]interface{}{"hash":genesisHash}
+ case "eth_syncing":value=false
+ case "net_peerCount":value="0x2"
+ case "eth_getCode":value="0x"
+ case "eth_getBalance":value="0x56bc75e2d63100000"
+ case "eth_getTransactionCount":value="0x2a"
+ case "eth_sendRawTransaction":
+  b.sent++;var raw string;json.Unmarshal(q.Params[0],&raw)
+  data,_:=hexutil.Decode(raw);var tx types.Transaction
+  if rlp.DecodeBytes(data,&tx)!=nil{panic("fixture RLP")};b.tx=&tx
+  saved,e:=ioutil.ReadFile(b.state);var j journal
+  if e!=nil||json.Unmarshal(saved,&j)!=nil||j.Hash!=tx.Hash().Hex()||j.Settled{panic("signed journal not durable before send")}
+  if b.failSend{json.NewEncoder(w).Encode(map[string]interface{}{"id":1,"result":nil,"error":map[string]interface{}{"message":"fixture ambiguous failure"}});return}
+  value=tx.Hash().Hex()
+  if b.autoReceipt{b.overrides["eth_getTransactionReceipt"]=map[string]interface{}{"transactionHash":tx.Hash().Hex(),"blockHash":genesisHash,"blockNumber":"0x1","status":"0x1"}}
+ case "eth_getTransactionReceipt":value=nil
+ default:panic("unapproved upstream method: "+q.Method)
+ }
+ if x,ok:=b.overrides[q.Method];ok{value=x}
+ json.NewEncoder(w).Encode(map[string]interface{}{"jsonrpc":"2.0","id":1,"result":value,"error":nil})
+}
+func fixture(t *testing.T)(*signer,*backend){
+ key,e:=crypto.HexToECDSA(strings.Repeat("0",63)+"1");if e!=nil{t.Fatal(e)}
+ dir:=t.TempDir();os.Chmod(dir,0700)
+ b:=&backend{overrides:map[string]interface{}{},state:filepath.Join(dir,"journal.json")}
+ h:=httptest.NewServer(b);t.Cleanup(h.Close)
+ s,e:=newSigner(config{Address:crypto.PubkeyToAddress(key.PublicKey).Hex(),State:b.state,Upstream:h.URL,PaymentsEnabled:true},key);if e!=nil{t.Fatal(e)}
+ return s,b
+}
+func params(s *signer)json.RawMessage{
+ raw,_:=json.Marshal([]map[string]string{{"from":s.address.Hex(),"to":"0x1111111111111111111111111111111111111111","value":"0xde0b6b3a7640000","gas":"0x5208","gasPrice":"0x3b9aca00"}});return raw
+}
+func TestValidTransferIsEIP155AndJournaledBeforeBroadcast(t *testing.T){
+ s,b:=fixture(t);v,e:=s.send(params(s));if e!=nil{t.Fatal(e)}
+ b.mu.Lock();defer b.mu.Unlock()
+ if b.sent!=1||v!=b.tx.Hash().Hex()||b.tx.ChainId().Int64()!=chainID||b.tx.Nonce()!=42||b.tx.Gas()!=21000||len(b.tx.Data())!=0{t.Fatal("payout policy differs")}
+ if b.tx.To().Hex()!="0x1111111111111111111111111111111111111111"||b.tx.Value().String()!="1000000000000000000"{t.Fatal("wrong recipient or amount")}
+ from,e:=types.Sender(types.NewEIP155Signer(b.tx.ChainId()),b.tx);if e!=nil||from!=s.address{t.Fatal("invalid sender signature")}
+ if i,e:=os.Stat(b.state);e!=nil||i.Mode().Perm()!=0600{t.Fatal("journal permissions")}
+}
+func TestWrongNetworkGenesisSyncAndFeesDoNotBroadcast(t *testing.T){
+ tests:=[]struct{method string;value interface{}}{
+  {"net_version","1"},{"eth_getBlockByNumber",map[string]interface{}{"hash":"0xwrong"}},{"eth_syncing",map[string]interface{}{"startingBlock":"0x0"}},
+  {"net_peerCount","0x0"},{"eth_getCode","0x6000"},{"eth_getBalance","0xde0b6b3a7640000"},{"eth_getTransactionCount","0x10000000000000000"},
+ }
+ for _,x:=range tests{t.Run(x.method,func(t *testing.T){s,b:=fixture(t);b.overrides[x.method]=x.value
+  if _,e:=s.send(params(s));e==nil{t.Fatal("bad native readiness accepted")};if b.sent!=0{t.Fatal("broadcast despite failed check")}
+ })}
+}
+func TestDisabledAndUnexpectedTransactionFieldsAreRejected(t *testing.T){
+ s,b:=fixture(t);s.cfg.PaymentsEnabled=false;if _,e:=s.send(params(s));e==nil{t.Fatal("disabled broadcasting accepted")};s.cfg.PaymentsEnabled=true
+ for _,change:=range []map[string]string{{"data":"0x1234"},{"gas":"0x5209"},{"gasPrice":"0x1"},{"from":"0x2222222222222222222222222222222222222222"},{"to":s.address.Hex()},{"to":"0x0000000000000000000000000000000000000000"},{"value":"0x0"},{"nonce":"0x2a"}}{
+  var values []map[string]string;json.Unmarshal(params(s),&values)
+  for k,v:=range change{values[0][k]=v};raw,_:=json.Marshal(values)
+  if _,e:=s.send(raw);e==nil{t.Fatal("unsupported transaction accepted",change)}
+ }
+ if b.sent!=0{t.Fatal("unsupported transaction broadcast")}
+}
+func TestAmbiguousBroadcastAndRestartNeverSendAnotherPayment(t *testing.T){
+ s,b:=fixture(t);b.failSend=true
+ if _,e:=s.send(params(s));e==nil{t.Fatal("uncertain submission accepted")}
+ if _,e:=s.send(params(s));e==nil{t.Fatal("second submission accepted")}
+ restarted,e:=newSigner(s.cfg,s.key);if e!=nil{t.Fatal(e)}
+ if _,e=restarted.send(params(s));e==nil{t.Fatal("restart bypassed pending payout")}
+ if b.sent!=1{t.Fatal("duplicate transaction broadcast")}
+}
+func TestUnwritableJournalPreventsBroadcastAndHoldsSigner(t *testing.T){
+ s,b:=fixture(t);s.cfg.State=filepath.Join(filepath.Dir(b.state),"missing","journal.json")
+ if _,e:=s.send(params(s));e==nil{t.Fatal("missing durable state accepted")}
+ if _,e:=s.send(params(s));e==nil{t.Fatal("signer continued after journal failure")};if b.sent!=0{t.Fatal("broadcast without durable journal")}
+}
+func TestCanonicalSuccessfulReceiptAllowsNextAdvancedNonce(t *testing.T){
+ s,b:=fixture(t);hash,e:=s.send(params(s));if e!=nil{t.Fatal(e)}
+ b.overrides["eth_getTransactionReceipt"]=map[string]interface{}{"transactionHash":hash,"status":"0x1","blockNumber":"0x1","blockHash":genesisHash}
+ raw,_:=json.Marshal([]interface{}{hash});if _,e=s.handle(request{Method:"eth_getTransactionReceipt",Params:raw});e!=nil{t.Fatal(e)}
+ if !s.pending.Settled{t.Fatal("canonical receipt did not settle journal")}
+ if _,e=s.send(params(s));e==nil{t.Fatal("same nonce reused after receipt")}
+ b.overrides["eth_getTransactionCount"]="0x2b"
+ if _,e=s.send(params(s));e!=nil{t.Fatal(e)}
+ if b.sent!=2||b.tx.Nonce()!=43{t.Fatal("second payout nonce differs")}
+}
+func TestFailedOrNoncanonicalReceiptNeverSettles(t *testing.T){
+ for _,status:=range []string{"0x0","0x1"}{t.Run(status,func(t *testing.T){s,b:=fixture(t);hash,e:=s.send(params(s));if e!=nil{t.Fatal(e)}
+  b.overrides["eth_getTransactionReceipt"]=map[string]interface{}{"transactionHash":hash,"status":status,"blockNumber":"0x1","blockHash":"0xwrong"}
+  raw,_:=json.Marshal([]interface{}{hash});if _,e=s.handle(request{Method:"eth_getTransactionReceipt",Params:raw});e==nil{t.Fatal("failed/noncanonical receipt accepted")}
+  if s.pending.Settled{t.Fatal("journal settled incorrectly")}
+ })}
+}
+func TestOnlyFixedReadinessChallengeCanBeSigned(t *testing.T){
+ s,_:=fixture(t);challenge:=sha256.Sum256([]byte("0x0"));raw,_:=json.Marshal([]string{s.address.Hex(),hexutil.Encode(challenge[:])})
+ if _,e:=s.handle(request{Method:"eth_sign",Params:raw});e!=nil{t.Fatal(e)}
+ raw,_=json.Marshal([]string{s.address.Hex(),"0xdeadbeef"});if _,e:=s.handle(request{Method:"eth_sign",Params:raw});e==nil{t.Fatal("generic signing accepted")}
+ for _,method:=range []string{"personal_unlockAccount","eth_sendRawTransaction","eth_signTransaction","admin_nodeInfo"}{
+  if _,e:=s.handle(request{Method:method,Params:json.RawMessage("[]")});e==nil{t.Fatal("forbidden RPC method",method)}
+ }
+}
+func TestMalformedHTTPAndBatchRequestsRejected(t *testing.T){
+ s,_:=fixture(t)
+ for _,raw:=range []string{`[]`,`{"jsonrpc":"2.0","id":1,"method":"net_peerCount","extra":true}`,`{"jsonrpc":"2.0","id":1,"method":"net_peerCount"} {}`,strings.Repeat("a",70000)}{
+  r:=httptest.NewRequest("POST","/",bytes.NewBufferString(raw));w:=httptest.NewRecorder();s.ServeHTTP(w,r)
+  if w.Code==200{t.Fatal("malformed request accepted")}
+ }
+}
+func TestPendingReceiptUsesExplicitNullResult(t *testing.T){
+ s,_:=fixture(t);raw,_:=json.Marshal(request{JSONRPC:"2.0",ID:json.RawMessage("1"),Method:"eth_getTransactionReceipt",Params:json.RawMessage(`["0x1111111111111111111111111111111111111111111111111111111111111111"]`)})
+ w:=httptest.NewRecorder();s.ServeHTTP(w,httptest.NewRequest("POST","/",bytes.NewReader(raw)))
+ var v map[string]interface{};json.Unmarshal(w.Body.Bytes(),&v);if _,ok:=v["result"];!ok||v["result"]!=nil{t.Fatal("null receipt differs")}
+}
+func TestJournalSymlinkIsRefused(t *testing.T){
+ s,b:=fixture(t);target:=filepath.Join(filepath.Dir(b.state),"operator-file");ioutil.WriteFile(target,[]byte("keep"),0600);os.Symlink(target,b.state)
+ if _,e:=newSigner(s.cfg,s.key);e==nil{t.Fatal("symlink journal loaded")}
+ raw,_:=ioutil.ReadFile(target);if string(raw)!="keep"{t.Fatal("operator file changed")}
+}
+func TestCancelledRequestNeverSignsOrBroadcasts(t *testing.T){
+ s,b:=fixture(t);ctx,cancel:=context.WithCancel(context.Background());cancel()
+ if _,e:=s.handleContext(ctx,request{Method:"eth_sendTransaction",Params:params(s)});e==nil{t.Fatal("cancelled request accepted")}
+ if b.sent!=0||s.pending!=nil{t.Fatal("cancelled request signed or broadcast")}
+}
+// This fixture exists only in the separate Go test binary, never the release.
+func TestPrivateSocketPoolClientFixture(t *testing.T){
+ dir:=os.Getenv("RGN_PAYOUT_E2E");if dir==""{t.Skip("separate pool-client integration fixture")}
+ s,b:=fixture(t);b.autoReceipt=true
+ path:=filepath.Join(dir,"signer.sock");listener,e:=net.Listen("unix",path);if e!=nil{t.Fatal(e)}
+ server:=&http.Server{Handler:s};go server.Serve(listener);defer server.Close();os.Chmod(path,0660)
+ ready,_:=json.Marshal(map[string]interface{}{"socket":path,"address":s.address.Hex(),"state":b.state})
+ if e=ioutil.WriteFile(filepath.Join(dir,"ready.json"),ready,0600);e!=nil{t.Fatal(e)}
+ deadline:=time.Now().Add(90*time.Second)
+ for{
+  if _,e=os.Stat(filepath.Join(dir,"stop"));e==nil{break}
+  if time.Now().After(deadline){t.Fatal("fixture timed out")};time.Sleep(100*time.Millisecond)
+ }
+ b.mu.Lock();defer b.mu.Unlock()
+ if b.sent!=1{t.Fatalf("expected one simulated native submission, got %d",b.sent)}
+ raw,e:=ioutil.ReadFile(b.state);var j journal;if e!=nil||json.Unmarshal(raw,&j)!=nil||!j.Settled{t.Fatal("pool client did not settle durable intent through canonical receipt")}
+}

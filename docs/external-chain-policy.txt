@@ -1,0 +1,22 @@
+External chain participation
+
+Set proxy.forge.externalChainPolicy to "dgb-doge" and multiChain to true to
+construct V3 proofs using DGB, DOGE or both. Do not configure additionalAux in
+this mode. Both native endpoints must be configured; a temporary source outage
+is handled by independent health observations. Loss of both sources pauses work.
+
+Set externalChainPolicy to "dgb-doge" in every template signer's configuration.
+Its multi array must contain exactly the DGB and DOGE entries, with the correct
+native genesis hashes, chain IDs and treasury payout scripts. Do not add dummy
+endpoints for excluded coins. Public signer identities and the required quorum
+must agree between the node consensus configuration and pool configuration.
+
+An empty policy preserves the existing five-chain configuration. Unknown policies,
+duplicate or missing chains and additional chains in two-chain mode are rejected.
+This preserves existing installations until their configuration is changed.
+
+The policy selects permitted work, not the number of external rewards required
+before issuing a block. Native block discoveries and rewards are checked separately.
+
+Changing the pool policy does not expand the chains permitted by node consensus.
+Additional anchor types require an explicitly reviewed consensus update.

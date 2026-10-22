@@ -1,0 +1,14 @@
+{
+  "passed": true,
+  "publicFiles": 221,
+  "bytes": 1710988,
+  "firstPartyAllowlistedCoreFiles": 170,
+  "compiledCoreFilesUnchanged": true,
+  "changedOriginalFiles": [
+    ".gitignore",
+    "README.md"
+  ],
+  "findings": [],
+  "criticalFindings": 0,
+  "method": "Explicit source allowlist, runtime-file exclusion, deployment binding and credential-pattern checks; fixture literals are public test data, not live keys"
+}

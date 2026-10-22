@@ -1,0 +1,19 @@
+[Unit]
+Description=RGN reference pool mining backend (edit paths and user before use)
+After=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_WITH_POOL_USER
+Group=REPLACE_WITH_POOL_GROUP
+WorkingDirectory=/REPLACE_WITH_SOURCE_DIRECTORY
+ExecStart=/REPLACE_WITH_SOURCE_DIRECTORY/build/rgn-pool /REPLACE_WITH_PRIVATE_CONFIG_DIRECTORY/mining.json
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=90
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

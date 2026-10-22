@@ -1,0 +1,30 @@
+package rpc
+
+import (
+ "context"
+ "errors"
+ "net"
+ "net/http"
+ "path/filepath"
+ "strings"
+ "time"
+)
+
+// NewPayoutRPCClient supports a private filesystem socket without exposing an
+// unlocked account on the node's public HTTP service. Other RPC clients and
+// native mining validation are unchanged.
+func NewPayoutRPCClient(name,url,timeout string)(*RPCClient,error){
+ if !strings.HasPrefix(url,"unix://"){return NewRPCClient(name,url,timeout,"",""),nil}
+ path:=strings.TrimPrefix(url,"unix://")
+ if !filepath.IsAbs(path)||filepath.Clean(path)!=path||len(path)>100||strings.ContainsAny(path,"\x00?#"){
+  return nil,errors.New("Invalid payout socket path")
+ }
+ interval,e:=time.ParseDuration(timeout);if e!=nil||interval<=0{return nil,errors.New("Invalid payout timeout")}
+ d:=&net.Dialer{Timeout:interval}
+ tr:=&http.Transport{Proxy:nil,DialContext:func(ctx context.Context,network,address string)(net.Conn,error){
+  if network!="tcp"||address!="unix:80"{return nil,errors.New("Private payout transport target differs")}
+  return d.DialContext(ctx,"unix",path)
+ }}
+ return &RPCClient{Name:name,Url:"http://unix",client:&http.Client{Transport:tr,Timeout:interval,
+  CheckRedirect:func(_ *http.Request,_ []*http.Request)error{return http.ErrUseLastResponse}}},nil
+}

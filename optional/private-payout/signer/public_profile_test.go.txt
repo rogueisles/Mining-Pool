@@ -1,0 +1,8 @@
+package main
+import "testing"
+func TestPublicWalletConfiguration(t *testing.T) {
+ for _,a:=range []string{"", "0x0000000000000000000000000000000000000000", "private-key-is-not-an-address"} {
+  if validPayoutAddress(a) { t.Fatal("invalid wallet accepted") }
+ }
+ if !validPayoutAddress("0x1111111111111111111111111111111111111111") { t.Fatal("operator wallet refused") }
+}

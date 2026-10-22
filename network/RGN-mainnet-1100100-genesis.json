@@ -1,0 +1,55 @@
+{
+  "alloc": {
+    "0x94931DA88ea88bf23f44502E012f71DeA86E6e9E": {
+      "comment": "Premine wallet \u2014 700,000,000 OGG",
+      "balance": "700000000000000000000000000"
+    }
+  },
+  "coinbase": "0x0000000000000000000000000000000000000000",
+  "config": {
+    "chainId": 70088,
+    "homesteadBlock": 0,
+    "eip150Block": 0,
+    "eip150Hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "eip155Block": 0,
+    "eip158Block": 0,
+    "byzantiumBlock": 0,
+    "constantinopleBlock": 0,
+    "progpow": {
+      "period": 10
+    },
+    "forgeBlock": 1100100,
+    "forge": {
+      "rewardSchedule": "rgn-mainnet-v3",
+      "requireDgbOrDogeWork": true,
+      "requireMultiExternalWork": true,
+      "pepecoinPayoutScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "dingocoinPayoutScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "bellscoinPayoutScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "allowAuxTree": true,
+      "retargetV2": true,
+      "auxChainId": 20295,
+      "dogeAuxChainId": 98,
+      "targetBlockTime": 12,
+      "preForgeGrossIssued": 1443341200708488883357593982,
+      "initialDifficulty": 21,
+      "minimumDifficulty": 1,
+      "templateSigners": [
+        "0xb00127ba6f96b6bbb32c96a8f74de40b1de1de30",
+        "0xd8dbe2efb89f2873986bce6d826aa6f417c5cb03",
+        "0x27f0e3e0060bb18fe4edc0059f67ae568aefdce3",
+        "0x282390aad1587182d2ecd852f923267d58c4fc14"
+      ],
+      "templateQuorum": 2,
+      "ltcPayoutScriptHash": "0x61a5c2ea83616bd160c97438eea42824ae63f7d3359e893d8b0d777d049b059d",
+      "dogePayoutScriptHash": "0x68907fbe8d80920192e8a8fc611dd4f10fcf0ac29ea09a6856ed59a46da4afb7",
+      "templateMaxValidity": 300
+    }
+  },
+  "difficulty": "0x5000000",
+  "extraData": "0x",
+  "gasLimit": "0x1000000",
+  "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "nonce": "0x0000000000000042",
+  "timestamp": "0x0"
+}

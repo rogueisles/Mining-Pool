@@ -1,0 +1,6 @@
+{
+  "armed": false,
+  "poolAddress": "REPLACE_WITH_YOUR_PUBLIC_RGN_ADDRESS",
+  "ipc": "/ABSOLUTE/PATH/TO/RGN/egem.ipc",
+  "activationHeight": 1100100
+}

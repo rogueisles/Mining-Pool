@@ -1,0 +1,136 @@
+"""Collect selected public pool health. Never request work, submit shares or send payments."""
+import argparse,base64,concurrent.futures,hashlib,http.client,json,os,socket,stat,subprocess,tempfile,time,urllib.request
+from pathlib import Path
+ADDRESS='REPLACE_WITH_YOUR_PUBLIC_RGN_ADDRESS';GENESIS='0xdc4d38c0ef41d3fdf50642fdf5fc99e221eadd09e73bbe616724f55a136270ab';ACTIVATION=1100100
+OUTPUT=Path('/var/lib/rgn-pool-public/health.json')
+HTTP=urllib.request.build_opener(urllib.request.ProxyHandler({}))
+def read_json(path,uid=0,modes=(0o600,0o640,0o644),limit=65536):
+ fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+ with os.fdopen(fd,'rb') as f:
+  i=os.fstat(f.fileno())
+  if not stat.S_ISREG(i.st_mode) or i.st_uid!=uid or i.st_nlink!=1 or stat.S_IMODE(i.st_mode) not in modes or i.st_size>limit:raise ValueError('Health source metadata differs')
+  return json.load(f)
+def rpc(url,method,params,auth=None):
+ allowed={'net_version','net_peerCount','eth_getBlockByNumber','eth_blockNumber','eth_syncing','getblockchaininfo','getnetworkinfo','getblockhash'}
+ if method not in allowed:raise ValueError('Only read-only health methods are permitted')
+ q=urllib.request.Request(url,json.dumps(dict(jsonrpc='2.0',id=1,method=method,params=params)).encode(),{'Content-Type':'application/json'})
+ if auth:q.add_header('Authorization','Basic '+base64.b64encode((auth['username']+':'+auth['password']).encode()).decode())
+ with HTTP.open(q,timeout=3) as r:raw=r.read(1024*1024+1)
+ if len(raw)>1024*1024:raise ValueError('Health response too large')
+ v=json.loads(raw)
+ if v.get('id')!=1 or v.get('error'):raise ValueError('Health RPC unavailable')
+ return v['result']
+def batch(url,calls,auth=None):
+ allowed={'net_version','eth_getBlockByNumber','eth_blockNumber','getblockchaininfo','getnetworkinfo','getblockhash'}
+ if any(m not in allowed for m,p in calls):raise ValueError('Read-only health batch required')
+ body=[dict(jsonrpc='2.0',id=i+1,method=m,params=p) for i,(m,p) in enumerate(calls)]
+ q=urllib.request.Request(url,json.dumps(body).encode(),{'Content-Type':'application/json'})
+ if auth:q.add_header('Authorization','Basic '+base64.b64encode((auth['username']+':'+auth['password']).encode()).decode())
+ with HTTP.open(q,timeout=6) as response:raw=response.read(1024*1024+1)
+ if len(raw)>1024*1024:raise ValueError('Health batch too large')
+ rows=json.loads(raw)
+ if not isinstance(rows,list) or len(rows)!=len(calls) or {v.get('id') for v in rows}!=set(range(1,len(calls)+1)) or any(v.get('error') for v in rows):raise ValueError('Health batch unavailable')
+ result={v['id']:v['result'] for v in rows};return [result[i+1] for i in range(len(calls))]
+def native(e):
+ h,n,genesis=batch(e['url'],[('getblockchaininfo',[]),('getnetworkinfo',[]),('getblockhash',[0])],e)
+ healthy=h.get('chain')=='main' and h.get('initialblockdownload') is False and h.get('blocks')==h.get('headers') and genesis==e['genesis'] and n.get('connections',0)>0
+ return dict(healthy=healthy,chain=h.get('chain'),blocks=h.get('blocks'),headers=h.get('headers'),initialblockdownload=h.get('initialblockdownload'),connections=n.get('connections'),pruned=h.get('pruned'))
+def peer(local_head):
+ url='https://rpc.rogueisles.com'
+ network,genesis,head_raw=batch(url,[('net_version',[]),('eth_getBlockByNumber',['0x0',False]),('eth_blockNumber',[])])
+ if network!='70088' or genesis['hash'].lower()!=GENESIS:raise ValueError('Peer chain differs')
+ head=int(head_raw,16);common=max(0,min(head,local_head)-2)
+ a=rpc('http://127.0.0.1:18545','eth_getBlockByNumber',[hex(common),False]);b=batch(url,[('eth_getBlockByNumber',[hex(common),False])])[0];same=a['hash']==b['hash'] and a['stateRoot']==b['stateRoot'];lag=abs(head-local_head)
+ return dict(healthy=same and lag<=3,commonHeight=common,hash=a['hash'],lagBlocks=lag,sameHead=same and head==local_head,convergencePending=same and lag>0,state='canonical' if same else 'mismatch',checkedAt=time.time())
+def active(name):return subprocess.run(['systemctl','is-active','--quiet',name],stdin=subprocess.DEVNULL,capture_output=True,timeout=3).returncode==0
+class UnixHTTP(http.client.HTTPConnection):
+ def connect(self):self.sock=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM);self.sock.settimeout(self.timeout);self.sock.connect('/run/rgn-pool-payments/signer.sock')
+def wallet_ready():
+ c=UnixHTTP('unix',timeout=3)
+ try:
+  challenge='0x'+hashlib.sha256(b'0x0').hexdigest();c.request('POST','/',json.dumps(dict(jsonrpc='2.0',id=1,method='eth_sign',params=[ADDRESS,challenge])),{'Content-Type':'application/json'});r=c.getresponse();v=json.loads(r.read(4096));sig=v.get('result')
+  return r.status==200 and not v.get('error') and isinstance(sig,str) and len(sig)==132 and len(bytes.fromhex(sig[2:]))==65
+ finally:c.close()
+def accounting():
+ import pwd
+ uid=pwd.getpwnam('rgn-pool-mainnet').pw_uid
+ v=read_json('/var/lib/rgn-pool-mainnet/journal/STATUS',uid,(0o600,),4*1024*1024)
+ age=time.time()-v['updatedUnixMS']/1000
+ healthy=0<=age<20 and v.get('accountingUnavailable') is False and v.get('workPaused') is False and v.get('undurableRecords')==0
+ return dict(healthy=healthy,updatedUnixMS=v['updatedUnixMS'],health=v.get('health'),workPaused=v.get('workPaused'),pendingRecords=v.get('pendingRecords'),uncreditedRecords=v.get('uncreditedRecords'))
+def stratum_job():
+ with socket.create_connection(('127.0.0.1',3333),timeout=3) as s:
+  s.settimeout(3);s.sendall((json.dumps(dict(id=1,method='mining.subscribe',params=[]))+'\n'+json.dumps(dict(id=2,method='mining.authorize',params=[ADDRESS+'.health','x']))+'\n').encode());f=s.makefile('rb');ok1=ok2=notify=False
+  for _ in range(12):
+   raw=f.readline(65537)
+   if not raw or len(raw)>65536:break
+   v=json.loads(raw)
+   if v.get('id')==1:ok1=not v.get('error') and isinstance(v.get('result'),list)
+   if v.get('id')==2:ok2=v.get('result') is True and not v.get('error')
+   if v.get('method')=='mining.notify':
+    p=v.get('params');notify=isinstance(p,list) and len(p)==9 and all(isinstance(p[i],str) for i in (0,1,2,3,5,6,7)) and isinstance(p[4],list) and isinstance(p[8],bool)
+   if ok1 and ok2 and notify:return dict(fresh=True,checkedAt=time.time())
+  return dict(fresh=False,checkedAt=time.time())
+def classify(head,armed,node_ready,native_any,peer_ok,worker,account_ok,fresh,payout_enabled):
+ eligible=head+1>=ACTIVATION
+ ready=eligible and armed and node_ready and native_any and peer_ok and worker and account_ok and fresh
+ state='awaiting-fork-height' if not eligible else ('unarmed' if not armed else ('mining-ready' if ready else 'mining-paused'))
+ return dict(readyForNiceHash=ready,freshCombinedJob=eligible and worker and fresh,accountingAcceptsWork=eligible and worker and account_ok,poolServicesAcceptsWork=ready,miningState=state,payoutsEnabled=payout_enabled)
+def collect():
+ url='http://127.0.0.1:18545'
+ if rpc(url,'net_version',[])!='70088' or rpc(url,'eth_getBlockByNumber',['0x0',False])['hash'].lower()!=GENESIS:raise ValueError('RGN identity differs')
+ head=int(rpc(url,'eth_blockNumber',[]),16);syncing=rpc(url,'eth_syncing',[]);peers=int(rpc(url,'net_peerCount',[]),16)
+ c=read_json('/etc/rgn-pool-mainnet/control.json');armed=c==dict(miningArmed=True,activationHeight=ACTIVATION,poolAddress=ADDRESS)
+ signer=read_json('/var/lib/rgn-template-signer/signer.json');external={};peer_state=dict(healthy=False,state='unavailable',checkedAt=time.time())
+ with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+  futures={coin:pool.submit(native,signer[coin]) for coin in ('digibyte','dogecoin')};pf=pool.submit(peer,head)
+  for coin,task in futures.items():
+   try:external[coin]=task.result()
+   except Exception:external[coin]=dict(healthy=False,state='unavailable')
+  try:peer_state=pf.result()
+  except Exception:pass
+ worker=active('rgn-pool-mainnet-mining');unlocker=active('rgn-pool-mainnet-unlocker');acc=dict(healthy=False,health='not-running' if not worker else 'unavailable');job=dict(fresh=False)
+ if worker and head+1>=ACTIVATION:
+  try:acc=accounting()
+  except Exception:pass
+  try:job=stratum_job()
+  except Exception:pass
+ wallet=False
+ try:wallet=wallet_ready()
+ except Exception:pass
+ payout_cfg=read_json('/etc/rgn-pool-payout-signer/config.json');payout_worker=active('rgn-pool-mainnet-payouts');payments=wallet and payout_worker and payout_cfg.get('paymentsEnabled') is True
+ scheduled=False
+ try:scheduled=read_json('/etc/rgn-pool-mainnet/hourly.json').get('hourlyPayoutsArmed') is True
+ except FileNotFoundError:pass
+ payout_status=('awaiting-fork-height' if scheduled and head<ACTIVATION else 'disabled') if not payments else 'enabled'
+ try:
+  hourly=read_json('/var/lib/rgn-pool-hourly/state.json',0,(0o600,))
+  if scheduled and 0<=time.time()-hourly['updated']<35 and hourly.get('state') not in ('running','awaiting-fork-height','ledger-payment-pending'):payout_status=hourly['state']
+ except FileNotFoundError:pass
+ journal=Path('/var/lib/rgn-pool-payout-signer/journal.json')
+ if journal.exists():
+  import pwd
+  j=read_json(journal,pwd.getpwnam('rgn-pool-payout-signer').pw_uid,(0o600,))
+  if j.get('settled') is not True:
+   payout_status='payment-pending' if payout_worker else 'recovery-required'
+   if not payout_worker:payments=False
+ result=dict(updated=time.time(),chainId=70088,genesisHash=GENESIS,activationHeight=ACTIVATION,miningArmed=armed,ogg=dict(height=head,syncing=syncing,peers=peers),external=external,peerCanonicalCheck=peer_state,requiresDgbOrDogeWork=True,accounting=acc,payouts=dict(enabled=payments,scheduled=scheduled,state=payout_status,interval='1h',walletReady=wallet,workerRunning=payout_worker),services=dict(mining=worker,unlocker=unlocker,workGate=active('rgn-pool-work-gate'),supervisor=active('rgn-pool-mainnet-supervisor')),stratum=job)
+ result.update(classify(head,armed,syncing is False and peers>0,any(v.get('healthy') for v in external.values()),peer_state['healthy'],worker,acc['healthy'],job['fresh'],payments))
+ return result
+def write_public(data):
+ parent=OUTPUT.parent;i=parent.lstat()
+ if not stat.S_ISDIR(i.st_mode) or i.st_uid!=0 or stat.S_IMODE(i.st_mode)!=0o755 or parent.resolve()!=parent:raise ValueError('Public health directory differs')
+ if os.path.lexists(OUTPUT):read_json(OUTPUT,0,(0o644,))
+ fd,name=tempfile.mkstemp(prefix='.health-',dir=parent)
+ try:
+  with os.fdopen(fd,'wb') as f:os.fchmod(f.fileno(),0o644);f.write((json.dumps(data,indent=2)+'\n').encode());f.flush();os.fsync(f.fileno())
+  os.replace(name,OUTPUT)
+ finally:
+  if os.path.lexists(name):os.unlink(name)
+def main():
+ p=argparse.ArgumentParser();p.add_argument('--print',action='store_true');a=p.parse_args()
+ try:r=collect()
+ except Exception:r=dict(updated=time.time(),chainId=70088,genesisHash=GENESIS,activationHeight=ACTIVATION,readyForNiceHash=False,freshCombinedJob=False,accountingAcceptsWork=False,poolServicesAcceptsWork=False,payoutsEnabled=False,miningState='health-unavailable',external={},peerCanonicalCheck=dict(healthy=False,state='unavailable'))
+ if a.print:print(json.dumps(r,indent=2))
+ else:write_public(r)
+if __name__=='__main__':main()

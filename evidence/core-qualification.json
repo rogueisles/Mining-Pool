@@ -1,0 +1,21 @@
+{
+  "startedAtUTC": "2026-10-21T19:42:36.403011+00:00",
+  "finishedAtUTC": "2026-10-21T19:45:21.247108+00:00",
+  "passed": true,
+  "scope": "Local signed V4 pool/service regressions, module verification and repeated builds; not deployed production qualification",
+  "productionReady": false,
+  "modulesVerified": true,
+  "allPoolRaceSuitesPassed": true,
+  "separateSourceRootBuildsMatch": true,
+  "binarySHA256": {
+    "pool": [
+      "1af46493df5cd540d9a0adf532af207a477f415a05d10a099c7e59b02e1e8fdb",
+      "1af46493df5cd540d9a0adf532af207a477f415a05d10a099c7e59b02e1e8fdb"
+    ],
+    "forge-live-signer": [
+      "fa7c4be4f7790259d2f65b8df720d6f1d649c5c573468bf5ac5926157f3438c3",
+      "fa7c4be4f7790259d2f65b8df720d6f1d649c5c573468bf5ac5926157f3438c3"
+    ]
+  },
+  "sourceUnchanged": true
+}

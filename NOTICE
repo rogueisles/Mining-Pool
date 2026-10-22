@@ -1,0 +1,9 @@
+Rogue Network FORGE V4 pool reference implementation
+
+Based on github.com/HawyUkr/open-progpow-pool and its upstream contributors.
+The inherited LICENSE (GNU GPL version 3) and source copyright notices are retained.
+Historical OGG / FORGE V3 identifiers in codecs, fixtures and storage are intentional.
+Do not rename consensus domains or ledger keys as a branding change.
+Node crypto dependencies for the optional wallet service come from Rogue-Network;
+retain that project's COPYING, COPYING.LESSER and third-party notices when distributing it.
+Private keys, RPC credentials, wallet files, ledgers and production backups are not supplied.

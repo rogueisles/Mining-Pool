@@ -1,0 +1,26 @@
+{
+  "name": "Your RGN Pool",
+  "siteUrl": "https://pool.example.invalid",
+  "network": "Rogue Network Mainnet",
+  "environment": "mainnet",
+  "symbol": "RGN",
+  "chainId": 70088,
+  "genesisHash": "0xdc4d38c0ef41d3fdf50642fdf5fc99e221eadd09e73bbe616724f55a136270ab",
+  "stratum": "stratum+tcp://pool.example.invalid:3333",
+  "walletRpc": "https://rpc.rogueisles.com",
+  "poolFee": 0,
+  "payoutThreshold": 1.0,
+  "maturityDepth": 32,
+  "payoutInterval": "1h",
+  "rewardScheme": "Proportional by round shares",
+  "indexable": false,
+  "treasury": {
+    "digibyte": "dgb1qwp3x0ff9tcmxdymtewd8wan8tx0nsa2xph32yc",
+    "dogecoin": "DBz6RAy6g8381EbR1KAepmTwAEG9GxY6Fz"
+  },
+  "networkLabel": "MAINNET",
+  "walletReadOnly": true,
+  "poolRewardAddress": "REPLACE_WITH_YOUR_PUBLIC_RGN_ADDRESS",
+  "activationHeight": 1100100,
+  "immatureDepth": 16
+}

@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "tests": 10,
+  "platform": "Linux",
+  "covers": [
+    "pre-fork issuance refusal",
+    "first fork candidate",
+    "unarmed state",
+    "wrong wallet/configuration",
+    "sync/no-peer refusal",
+    "RPC mutation allowlist",
+    "automatic treasury/quorum configuration",
+    "private generated files"
+  ],
+  "productionServersChanged": false,
+  "liveFundsUsed": false
+}

@@ -1,0 +1,161 @@
+{
+  "name": "rgn-reference",
+  "coin": "rgn",
+  "threads": 2,
+  "newrelicEnabled": false,
+  "redis": {
+    "endpoint": "127.0.0.1:6379",
+    "password": "REPLACE_LOCALLY",
+    "database": 0,
+    "poolSize": 10
+  },
+  "upstream": [
+    {
+      "name": "private-rgn-work-gate",
+      "url": "http://127.0.0.1:38096",
+      "timeout": "20s"
+    }
+  ],
+  "upstreamCheckInterval": "5s",
+  "proxy": {
+    "enabled": false,
+    "listen": "127.0.0.1:38095",
+    "behindReverseProxy": false,
+    "healthCheck": true,
+    "maxFails": 3,
+    "difficulty": 50000,
+    "blockRefreshInterval": "1s",
+    "stateUpdateInterval": "10s",
+    "hashrateExpiration": "1h",
+    "limitHeadersSize": 4096,
+    "limitBodySize": 4096,
+    "policy": {
+      "workers": 2,
+      "resetInterval": "1h",
+      "refreshInterval": "1m",
+      "limits": {
+        "enabled": false,
+        "limit": 30,
+        "grace": "5m",
+        "limitJump": 10
+      },
+      "banning": {
+        "enabled": false,
+        "timeout": 1800,
+        "invalidPercent": 30,
+        "checkThreshold": 100,
+        "malformedLimit": 100
+      }
+    },
+    "stratum": {
+      "enabled": false,
+      "listen": "127.0.0.1:3333",
+      "timeout": "120s",
+      "maxConn": 4096,
+      "tls": false
+    },
+    "forge": {
+      "enabled": true,
+      "multiChain": true,
+      "externalChainPolicy": "dgb-doge",
+      "additionalAux": [],
+      "retainExternalWork": false,
+      "accountingJournalDir": "/PRIVATE/OPERATOR/PATH/accounting",
+      "extranonce1Size": 4,
+      "extranonce2Size": 4,
+      "jobBacklog": 64,
+      "maxNTimeDriftSec": 7200,
+      "templateValiditySec": 120,
+      "templateQuorum": 2,
+      "templateSigners": [
+        {
+          "name": "signer1",
+          "url": "https://signer1.rogueisles.com/v4/sign",
+          "address": "0xb00127ba6f96b6bbb32c96a8f74de40b1de1de30",
+          "timeout": "8s"
+        },
+        {
+          "name": "signer2",
+          "url": "https://signer2.rogueisles.com/v4/sign",
+          "address": "0xd8dbe2efb89f2873986bce6d826aa6f417c5cb03",
+          "timeout": "8s"
+        },
+        {
+          "name": "signer3",
+          "url": "https://signer3.rogueisles.com/v4/sign",
+          "address": "0x27f0e3e0060bb18fe4edc0059f67ae568aefdce3",
+          "timeout": "8s"
+        },
+        {
+          "name": "signer4",
+          "url": "https://signer4.rogueisles.com/v4/sign",
+          "address": "0x282390aad1587182d2ecd852f923267d58c4fc14",
+          "timeout": "8s"
+        }
+      ],
+      "variableDifficulty": {
+        "enabled": true,
+        "minimum": 50000,
+        "maximum": 2000000,
+        "targetSeconds": 2,
+        "retargetSeconds": 30
+      },
+      "digibyte": {
+        "name": "digibyte",
+        "url": "http://127.0.0.1:33522",
+        "timeout": "8s",
+        "username": "REPLACE_LOCALLY",
+        "password": "REPLACE_LOCALLY",
+        "payoutScript": "0014706267a5255e3666936bcb9a777667599f387546"
+      },
+      "dogecoin": {
+        "name": "dogecoin",
+        "url": "http://127.0.0.1:32555",
+        "timeout": "8s",
+        "username": "REPLACE_LOCALLY",
+        "password": "REPLACE_LOCALLY",
+        "payoutScript": "76a9144b1508ebe06723842994adf33bdba36b4eba44c488ac"
+      }
+    }
+  },
+  "api": {
+    "enabled": false,
+    "listen": "127.0.0.1:8080",
+    "statsCollectInterval": "5s",
+    "hashrateWindow": "30m",
+    "hashrateLargeWindow": "3h",
+    "luckWindow": [
+      64,
+      128
+    ],
+    "payments": 30,
+    "blocks": 50,
+    "purgeInterval": "10m"
+  },
+  "unlocker": {
+    "enabled": false,
+    "poolFee": 0,
+    "poolFeeAddress": "",
+    "depth": 32,
+    "immatureDepth": 16,
+    "interval": "15s",
+    "timeout": "5s",
+    "daemon": "http://127.0.0.1:38096",
+    "forgeBlock": 1100100,
+    "keepTxFees": false,
+    "donate": false
+  },
+  "payouts": {
+    "enabled": false,
+    "requirePeers": 1,
+    "interval": "1h",
+    "timeout": "5s",
+    "gas": "21000",
+    "gasPrice": "1000000000",
+    "autoGas": false,
+    "threshold": 1000000000,
+    "bgsave": true,
+    "daemon": "unix:///run/rgn-pool-payments/signer.sock",
+    "address": "REPLACE_WITH_YOUR_PUBLIC_RGN_ADDRESS"
+  }
+}

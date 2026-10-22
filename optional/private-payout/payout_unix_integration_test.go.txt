@@ -1,0 +1,16 @@
+package rpc
+import("encoding/json";"io/ioutil";"os";"testing")
+func TestActualPrivatePayoutSignerIntegration(t *testing.T){
+ path:=os.Getenv("RGN_PAYOUT_E2E_READY");if path==""{t.Skip("separate private signer integration")}
+ raw,e:=ioutil.ReadFile(path);if e!=nil{t.Fatal(e)}
+ var fixture struct{Socket string `json:"socket"`;Address string `json:"address"`};if json.Unmarshal(raw,&fixture)!=nil{t.Fatal("fixture metadata")}
+ c,e:=NewPayoutRPCClient("real-private-signer-fixture","unix://"+fixture.Socket,"5s");if e!=nil{t.Fatal(e)}
+ if n,e:=c.GetPeerCount();e!=nil||n!=2{t.Fatal("peer check failed",e)}
+ if _,e:=c.Sign(fixture.Address,"0x0");e!=nil{t.Fatal("readiness challenge failed",e)}
+ if _,e:=c.Sign(fixture.Address,"unapproved arbitrary data");e==nil{t.Fatal("arbitrary signing accepted")}
+ if n,e:=c.GetBalance(fixture.Address);e!=nil||n.Sign()<=0{t.Fatal("balance read failed",e)}
+ hash,e:=c.SendTransaction(fixture.Address,"0x1111111111111111111111111111111111111111","0x5208","0x3b9aca00","0xde0b6b3a7640000",false)
+ if e!=nil{t.Fatal("simulated private transfer failed",e)}
+ if _,e=c.SendTransaction(fixture.Address,"0x2222222222222222222222222222222222222222","0x5208","0x3b9aca00","0xde0b6b3a7640000",false);e==nil{t.Fatal("second payout accepted before first receipt")}
+ receipt,e:=c.GetTxReceipt(hash);if e!=nil||receipt==nil||!receipt.Confirmed()||!receipt.Successful(){t.Fatal("receipt failed",e)}
+}

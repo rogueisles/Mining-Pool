@@ -1,0 +1,30 @@
+package rpc
+import(
+ "encoding/json"
+ "net"
+ "net/http"
+ "os"
+ "path/filepath"
+ "testing"
+)
+func TestPayoutPrivateUnixSocketTransport(t *testing.T){
+ path:=filepath.Join(t.TempDir(),"pay.sock");listener,e:=net.Listen("unix",path);if e!=nil{t.Fatal(e)}
+ server:=&http.Server{Handler:http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){
+  var q struct{Method string `json:"method"`;ID int `json:"id"`};json.NewDecoder(r.Body).Decode(&q)
+  if q.Method!="net_peerCount"{t.Error("unexpected method")};json.NewEncoder(w).Encode(map[string]interface{}{"id":q.ID,"result":"0x2","error":nil})
+ })};go server.Serve(listener);defer server.Close();os.Chmod(path,0600)
+ c,e:=NewPayoutRPCClient("test","unix://"+path,"2s");if e!=nil{t.Fatal(e)}
+ n,e:=c.GetPeerCount();if e!=nil||n!=2{t.Fatalf("private RPC failed: %v %d",e,n)}
+ if c.Url!="http://unix"{t.Fatal("private path escaped into HTTP target")}
+}
+func TestPrivatePayoutRefusesRedirect(t *testing.T){
+ path:=filepath.Join(t.TempDir(),"pay.sock");listener,e:=net.Listen("unix",path);if e!=nil{t.Fatal(e)}
+ count:=0;server:=&http.Server{Handler:http.HandlerFunc(func(w http.ResponseWriter,r *http.Request){count++;http.Redirect(w,r,"http://other.invalid",307)})};go server.Serve(listener);defer server.Close()
+ c,e:=NewPayoutRPCClient("test","unix://"+path,"1s");if e!=nil{t.Fatal(e)}
+ if _,e=c.GetPeerCount();e==nil{t.Fatal("redirect accepted")};if count!=1{t.Fatal("redirect followed")}
+}
+func TestPayoutUnixPathAndDurationValidation(t *testing.T){
+ for _,path:=range []string{"relative","/tmp/a/../b","/tmp/a?query","/tmp/a\x00b"}{if _,e:=NewPayoutRPCClient("test","unix://"+path,"1s");e==nil{t.Fatal("bad path accepted",path)}}
+ if _,e:=NewPayoutRPCClient("test","unix:///run/pay.sock","0s");e==nil{t.Fatal("invalid timeout accepted")}
+ c,e:=NewPayoutRPCClient("legacy","http://127.0.0.1:8545","2s");if e!=nil||c.Url!="http://127.0.0.1:8545"{t.Fatal("legacy HTTP changed")}
+}

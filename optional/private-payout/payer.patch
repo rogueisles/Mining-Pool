@@ -1,0 +1,13 @@
+--- a/payouts/payer.go
++++ b/payouts/payer.go
+@@ -52,7 +52,9 @@
+ 
+ func NewPayoutsProcessor(cfg *PayoutsConfig, backend *storage.RedisClient) *PayoutsProcessor {
+ 	u := &PayoutsProcessor{config: cfg, backend: backend}
+-	u.rpc = rpc.NewRPCClient("PayoutsProcessor", cfg.Daemon, cfg.Timeout, "", "")
++	var err error
++	u.rpc, err = rpc.NewPayoutRPCClient("PayoutsProcessor", cfg.Daemon, cfg.Timeout)
++	if err != nil { panic("Invalid private payout daemon configuration") }
+ 	return u
+ }
+ 

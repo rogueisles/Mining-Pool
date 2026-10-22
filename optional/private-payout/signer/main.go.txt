@@ -1,0 +1,214 @@
+// Private local payout signer. No TCP listener, personal RPC or generic signing API.
+package main
+
+import (
+ "bytes"
+ "context"
+ "crypto/ecdsa"
+ "crypto/sha256"
+ "encoding/json"
+ "errors"
+ "fmt"
+ "io"
+ "io/ioutil"
+ "math/big"
+ "net"
+ "net/http"
+ "os"
+ "path/filepath"
+ "strings"
+ "sync"
+ "syscall"
+ "time"
+
+ "github.com/TeamEGEM/go-egem/accounts/keystore"
+ "github.com/TeamEGEM/go-egem/common"
+ "github.com/TeamEGEM/go-egem/common/hexutil"
+ "github.com/TeamEGEM/go-egem/core/types"
+ "github.com/TeamEGEM/go-egem/crypto"
+ "github.com/TeamEGEM/go-egem/rlp"
+)
+
+const genesisHash="0xdc4d38c0ef41d3fdf50642fdf5fc99e221eadd09e73bbe616724f55a136270ab"
+const chainID=70088
+type config struct {
+ Socket string `json:"socket"`
+ State string `json:"state"`
+ Upstream string `json:"upstream"`
+ Address string `json:"address"`
+ PaymentsEnabled bool `json:"paymentsEnabled"`
+}
+type request struct { JSONRPC string `json:"jsonrpc"`; ID json.RawMessage `json:"id"`; Method string `json:"method"`; Params json.RawMessage `json:"params"` }
+type response struct { JSONRPC string `json:"jsonrpc"`; ID json.RawMessage `json:"id"`; Result interface{} `json:"result,omitempty"`; Error *rpcError `json:"error,omitempty"` }
+type rpcError struct { Code int `json:"code"`; Message string `json:"message"` }
+type journal struct { Hash string `json:"hash"`; Raw string `json:"raw"`; Nonce uint64 `json:"nonce"`; Settled bool `json:"settled"` }
+type signer struct { cfg config; key *ecdsa.PrivateKey; address common.Address; client *http.Client; mu sync.Mutex; pending *journal; requestContext context.Context }
+var errRequest=errors.New("Unsupported payout request")
+
+func strict(raw []byte,out interface{})error {
+ d:=json.NewDecoder(bytes.NewReader(raw));d.DisallowUnknownFields()
+ if d.Decode(out)!=nil{return errRequest}
+ var extra interface{};if d.Decode(&extra)!=io.EOF{return errRequest};return nil
+}
+func quantity(raw string)(*big.Int,error){ n,e:=hexutil.DecodeBig(raw);if e!=nil||n.Sign()<0{return nil,errRequest};return n,nil }
+func address(raw string)(common.Address,error){if len(raw)!=42||!common.IsHexAddress(raw){return common.Address{},errRequest};return common.HexToAddress(raw),nil}
+func newSigner(c config,key *ecdsa.PrivateKey)(*signer,error){
+ a,e:=address(c.Address);if e!=nil||crypto.PubkeyToAddress(key.PublicKey)!=a{return nil,errors.New("Payout wallet address differs")}
+ tr:=http.DefaultTransport.(*http.Transport).Clone();tr.Proxy=nil
+ s:=&signer{cfg:c,key:key,address:a,client:&http.Client{Transport:tr,Timeout:4*time.Second,CheckRedirect:func(_ *http.Request,_ []*http.Request)error{return http.ErrUseLastResponse}}}
+ if data,e:=readPrivate(c.State,1024*1024);e==nil{
+  var j journal;if strict(data,&j)!=nil{return nil,errors.New("Payout journal differs")}
+  raw,e:=hexutil.Decode(j.Raw);if e!=nil{return nil,errors.New("Payout journal differs")}
+  var tx types.Transaction
+  if rlp.DecodeBytes(raw,&tx)!=nil||tx.Hash().Hex()!=j.Hash||tx.Nonce()!=j.Nonce||tx.ChainId().Cmp(big.NewInt(chainID))!=0{return nil,errors.New("Payout journal transaction differs")}
+  from,e:=types.Sender(types.NewEIP155Signer(big.NewInt(chainID)),&tx)
+  if e!=nil||from!=a||tx.To()==nil||len(tx.Data())!=0||tx.Gas()!=21000||tx.GasPrice().Cmp(big.NewInt(1000000000))!=0{return nil,errors.New("Payout journal policy differs")}
+  s.pending=&j
+ }else if !os.IsNotExist(e){return nil,errors.New("Payout journal is not safely readable")}
+ return s,nil
+}
+func readPrivate(path string,limit int64)([]byte,error){
+ f,e:=os.OpenFile(path,os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK,0);if e!=nil{return nil,e};defer f.Close()
+ i,e:=f.Stat();if e!=nil{return nil,e};st,ok:=i.Sys().(*syscall.Stat_t)
+ if !ok||!i.Mode().IsRegular()||i.Mode().Perm()!=0600||st.Uid!=uint32(os.Geteuid())||st.Nlink!=1||i.Size()>limit{return nil,errors.New("Private file metadata differs")}
+ return ioutil.ReadAll(io.LimitReader(f,limit+1))
+}
+func (s *signer)rpc(method string,params interface{},out interface{})error{
+ raw,_:=json.Marshal(map[string]interface{}{"jsonrpc":"2.0","id":1,"method":method,"params":params})
+ ctx:=s.requestContext;if ctx==nil{ctx=context.Background()}
+ req,e:=http.NewRequestWithContext(ctx,"POST",s.cfg.Upstream,bytes.NewReader(raw));if e!=nil{return errors.New("RGN RPC unavailable")};req.Header.Set("Content-Type","application/json")
+ r,e:=s.client.Do(req);if e!=nil{return errors.New("RGN RPC unavailable")};defer r.Body.Close()
+ if r.StatusCode!=200{return errors.New("RGN RPC unavailable")}
+ raw,e=ioutil.ReadAll(io.LimitReader(r.Body,1024*1024+1));if e!=nil||len(raw)>1024*1024{return errors.New("RGN RPC response differs")}
+ var v struct{ ID int `json:"id"`; Result json.RawMessage `json:"result"`; Error json.RawMessage `json:"error"` }
+ if json.Unmarshal(raw,&v)!=nil||v.ID!=1||len(v.Result)==0||(len(v.Error)>0&&string(v.Error)!="null"){return errors.New("RGN RPC returned an error")}
+ if json.Unmarshal(v.Result,out)!=nil{return errors.New("RGN RPC result differs")};return nil
+}
+func (s *signer)identity()error{
+ var network string;if e:=s.rpc("net_version",[]interface{}{},&network);e!=nil{return e};if network!="70088"{return errors.New("Wrong RGN network")}
+ var block struct{ Hash string `json:"hash"` };if e:=s.rpc("eth_getBlockByNumber",[]interface{}{"0x0",false},&block);e!=nil{return e};if strings.ToLower(block.Hash)!=genesisHash{return errors.New("Wrong RGN genesis")};return nil
+}
+func (s *signer)save(j *journal)error{
+ dir:=filepath.Dir(s.cfg.State);i,e:=os.Lstat(dir);if e!=nil{return errors.New("Payout state directory unavailable")};st,ok:=i.Sys().(*syscall.Stat_t)
+ if !ok||!i.IsDir()||i.Mode().Perm()!=0700||st.Uid!=uint32(os.Geteuid()){return errors.New("Payout state directory metadata differs")}
+ // Never replace an operator-created symlink or unexpected journal.
+ if _,e:=readPrivate(s.cfg.State,1024*1024);e!=nil&&!os.IsNotExist(e){return errors.New("Payout journal metadata differs")}
+ f,e:=ioutil.TempFile(dir,".payout-");if e!=nil{return errors.New("Payout journal write failed")};defer os.Remove(f.Name())
+ raw,_:=json.Marshal(j)
+ if f.Chmod(0600)!=nil{f.Close();return errors.New("Payout journal permissions failed")}
+ if _,e=f.Write(raw);e!=nil{f.Close();return errors.New("Payout journal write failed")}
+ if e=f.Sync();e!=nil{f.Close();return errors.New("Payout journal sync failed")};if e=f.Close();e!=nil{return errors.New("Payout journal close failed")}
+ if e=os.Rename(f.Name(),s.cfg.State);e!=nil{return errors.New("Payout journal commit failed")}
+ d,e:=os.Open(dir);if e!=nil{return errors.New("Payout journal directory unavailable")};defer d.Close()
+ if e=d.Sync();e!=nil{return errors.New("Payout journal directory sync failed")}
+ s.pending=j;return nil
+}
+func (s *signer)send(params json.RawMessage)(interface{},error){
+ if !s.cfg.PaymentsEnabled{return nil,errors.New("Payout broadcasting is disabled")}
+ var args []map[string]string;if strict(params,&args)!=nil||len(args)!=1||len(args[0])!=5{return nil,errRequest};v:=args[0]
+ for _,k:=range []string{"from","to","value","gas","gasPrice"}{if _,ok:=v[k];!ok{return nil,errRequest}}
+ from,e:=address(v["from"]);if e!=nil||from!=s.address{return nil,errRequest};to,e:=address(v["to"]);if e!=nil||to==(common.Address{})||to==s.address{return nil,errRequest}
+ amount,e:=quantity(v["value"]);if e!=nil||amount.Sign()<=0||amount.BitLen()>256{return nil,errRequest}
+ gas,e:=quantity(v["gas"]);if e!=nil||gas.Cmp(big.NewInt(21000))!=0{return nil,errRequest};price,e:=quantity(v["gasPrice"]);if e!=nil||price.Cmp(big.NewInt(1000000000))!=0{return nil,errRequest}
+ if s.pending!=nil&&!s.pending.Settled{return nil,errors.New("Previous payout requires receipt or manual recovery")}
+ if e=s.identity();e!=nil{return nil,e}
+ var syncing json.RawMessage;if e=s.rpc("eth_syncing",[]interface{}{},&syncing);e!=nil||string(syncing)!="false"{return nil,errors.New("RGN node is not synchronized")}
+ var peers string;if e=s.rpc("net_peerCount",[]interface{}{},&peers);e!=nil{return nil,e};n,e:=quantity(peers);if e!=nil||n.Sign()==0{return nil,errors.New("RGN node has no peers")}
+ var code string;if e=s.rpc("eth_getCode",[]interface{}{to.Hex(),"latest"},&code);e!=nil{return nil,e};if code!="0x"{return nil,errors.New("Payout recipient requires unsupported contract execution")}
+ var balance string;if e=s.rpc("eth_getBalance",[]interface{}{s.address.Hex(),"pending"},&balance);e!=nil{return nil,e};funds,e:=quantity(balance);if e!=nil{return nil,e}
+ cost:=new(big.Int).Add(amount,new(big.Int).Mul(gas,price));if funds.Cmp(cost)<0{return nil,errors.New("Pool balance does not cover payout plus gas")}
+ var nonceRaw string;if e=s.rpc("eth_getTransactionCount",[]interface{}{s.address.Hex(),"pending"},&nonceRaw);e!=nil{return nil,e};nonce,e:=quantity(nonceRaw);if e!=nil||!nonce.IsUint64(){return nil,errors.New("RGN nonce differs")}
+ if s.pending!=nil&&nonce.Uint64()<=s.pending.Nonce{return nil,errors.New("Payout nonce has not advanced; manual recovery required")}
+ if s.requestContext!=nil&&s.requestContext.Err()!=nil{return nil,errors.New("Payout request cancelled before signing")}
+ tx,e:=types.SignTx(types.NewTransaction(nonce.Uint64(),to,amount,21000,price,nil),types.NewEIP155Signer(big.NewInt(chainID)),s.key);if e!=nil{return nil,errors.New("Payout signing failed")}
+ raw,e:=rlp.EncodeToBytes(tx);if e!=nil{return nil,errors.New("Payout encoding failed")}
+ j:=&journal{Hash:tx.Hash().Hex(),Raw:hexutil.Encode(raw),Nonce:nonce.Uint64()}
+ s.pending=j
+ if e=s.save(j);e!=nil{return nil,e}
+ if s.requestContext!=nil&&s.requestContext.Err()!=nil{return nil,errors.New("Payout request cancelled after journaling; manual recovery required")}
+ // Once signed intent is durable, any ambiguous send leaves it unresolved.
+ // Never sign another transaction automatically after a timeout/restart.
+ var hash string;if e=s.rpc("eth_sendRawTransaction",[]interface{}{j.Raw},&hash);e!=nil{return nil,errors.New("Payout submission uncertain; inspect durable journal before recovery")}
+ if !strings.EqualFold(hash,j.Hash){return nil,errors.New("Payout transaction hash differs; manual recovery required")};return j.Hash,nil
+}
+func (s *signer)handle(q request)(interface{},error){
+ return s.handleContext(context.Background(),q)
+}
+func (s *signer)handleContext(ctx context.Context,q request)(interface{},error){
+ s.mu.Lock();defer s.mu.Unlock()
+ if ctx.Err()!=nil{return nil,errors.New("Payout request cancelled")}
+ s.requestContext=ctx;defer func(){s.requestContext=nil}()
+ switch q.Method{
+ case "eth_sendTransaction":return s.send(q.Params)
+ case "eth_sign":
+  var a []string;if strict(q.Params,&a)!=nil||len(a)!=2{return nil,errRequest};from,e:=address(a[0]);challenge:=sha256.Sum256([]byte("0x0"));if e!=nil||from!=s.address||a[1]!=hexutil.Encode(challenge[:]){return nil,errRequest}
+  sig,e:=crypto.Sign(crypto.Keccak256([]byte("\x19Ethereum Signed Message:\n32"),challenge[:]),s.key);if e!=nil{return nil,errors.New("Payout readiness signature failed")};sig[64]+=27;return hexutil.Encode(sig),nil
+ case "net_peerCount":
+  if len(q.Params)>0&&string(q.Params)!="null"&&string(q.Params)!="[]"{return nil,errRequest};var n string;e:=s.rpc(q.Method,[]interface{}{},&n);return n,e
+ case "eth_getBalance":
+  var a []string;if strict(q.Params,&a)!=nil||len(a)!=2{return nil,errRequest};from,e:=address(a[0]);if e!=nil||from!=s.address||(a[1]!="latest"&&a[1]!="pending"){return nil,errRequest};var n string;e=s.rpc(q.Method,a,&n);return n,e
+ case "eth_getTransactionReceipt":
+  var a []string;if strict(q.Params,&a)!=nil||len(a)!=1{return nil,errRequest};hash,e:=hexutil.Decode(a[0]);if e!=nil||len(hash)!=32{return nil,errRequest}
+  if e=s.identity();e!=nil{return nil,e}
+  var receipt map[string]interface{};if e=s.rpc(q.Method,a,&receipt);e!=nil{return nil,e}
+  if receipt==nil{return nil,nil}
+  // Advance only on a successful canonical receipt for the durable transaction.
+  if s.pending!=nil&&strings.EqualFold(a[0],s.pending.Hash)&&!s.pending.Settled{
+   if receipt["transactionHash"]!=s.pending.Hash||receipt["status"]!="0x1"{return nil,errors.New("Payout receipt failed or differs; manual recovery required")}
+   number,ok:=receipt["blockNumber"].(string);if !ok{return nil,errors.New("Payout receipt block differs")}
+   var block struct{Hash string `json:"hash"`};if e=s.rpc("eth_getBlockByNumber",[]interface{}{number,false},&block);e!=nil{return nil,e}
+   if block.Hash==""||receipt["blockHash"]!=block.Hash{return nil,errors.New("Payout receipt is not canonical")}
+   updated:=*s.pending;updated.Settled=true;if e=s.save(&updated);e!=nil{return nil,e}
+  }
+  return receipt,nil
+ }
+ return nil,errRequest
+}
+func (s *signer)ServeHTTP(w http.ResponseWriter,r *http.Request){
+ w.Header().Set("Content-Type","application/json");w.Header().Set("Cache-Control","no-store")
+ if r.Method!="POST"||r.URL.Path!="/"{http.Error(w,"Not found",404);return}
+ raw,e:=ioutil.ReadAll(http.MaxBytesReader(w,r.Body,65536));if e!=nil{http.Error(w,"Request too large",413);return}
+ var q request;if strict(raw,&q)!=nil||q.JSONRPC!="2.0"||len(q.ID)==0||len(q.ID)>256{http.Error(w,"Invalid request",400);return}
+ v,e:=s.handleContext(r.Context(),q);out:=response{JSONRPC:"2.0",ID:q.ID}
+ if e!=nil{out.Error=&rpcError{Code:-32000,Message:e.Error()}}else{out.Result=v}
+ // Use an explicit null result for a not-yet-mined transaction receipt.
+ if e==nil&&v==nil{json.NewEncoder(w).Encode(map[string]interface{}{"jsonrpc":"2.0","id":q.ID,"result":nil});return}
+ json.NewEncoder(w).Encode(out)
+}
+func readConfig(path string)([]byte,error){
+ f,e:=os.OpenFile(path,os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK,0);if e!=nil{return nil,e};defer f.Close()
+ i,e:=f.Stat();if e!=nil{return nil,e};st,ok:=i.Sys().(*syscall.Stat_t)
+ if !ok||!i.Mode().IsRegular()||st.Uid!=0||st.Nlink!=1||(i.Mode().Perm()!=0644&&i.Mode().Perm()!=0600)||i.Size()>65536{return nil,errors.New("Signer configuration metadata differs")}
+ return ioutil.ReadAll(io.LimitReader(f,65537))
+}
+func readCredential(path string,limit int64)([]byte,error){
+ f,e:=os.OpenFile(path,os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK,0);if e!=nil{return nil,e};defer f.Close()
+ i,e:=f.Stat();if e!=nil{return nil,e};st,ok:=i.Sys().(*syscall.Stat_t)
+ if !ok||!i.Mode().IsRegular()||(st.Uid!=0&&st.Uid!=uint32(os.Geteuid()))||st.Nlink!=1||(i.Mode().Perm()!=0400&&i.Mode().Perm()!=0600)||i.Size()>limit{return nil,errors.New("Private credential metadata differs")}
+ return ioutil.ReadAll(io.LimitReader(f,limit+1))
+}
+func load(path string)(*signer,error){
+ raw,e:=readConfig(path);if e!=nil{return nil,errors.New("Signer configuration metadata differs")};var c config;if strict(raw,&c)!=nil{return nil,errors.New("Signer configuration format differs")}
+ if !validPayoutAddress(c.Address)||c.Upstream!="http://127.0.0.1:18545"||c.Socket!="/run/rgn-pool-payments/signer.sock"||c.State!="/var/lib/rgn-pool-payout-signer/journal.json"{return nil,errors.New("Signer configuration profile differs")}
+ // Systemd copies credentials into an isolated per-service runtime directory.
+ dir:=os.Getenv("CREDENTIALS_DIRECTORY");if !filepath.IsAbs(dir)||filepath.Clean(dir)!=dir{return nil,errors.New("Private runtime credential paths differ")}
+ keyRaw,e:=readCredential(filepath.Join(dir,"wallet"),65536);if e!=nil{return nil,errors.New("Encrypted wallet credential unavailable")}
+ password,e:=readCredential(filepath.Join(dir,"password"),4096);if e!=nil{return nil,errors.New("Wallet password credential unavailable")}
+ key,e:=keystore.DecryptKey(keyRaw,strings.TrimSuffix(string(password),"\n"));for i:=range password{password[i]=0};if e!=nil{return nil,errors.New("Encrypted wallet could not be opened")}
+ s,e:=newSigner(c,key.PrivateKey);if e!=nil{return nil,e};if e=s.identity();e!=nil{return nil,e};return s,nil
+}
+func run()error{
+ if len(os.Args)==2&&os.Args[1]=="--version"{return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"program":"rgn-private-payout-signer","transport":"unix-socket-only","chainId":chainID})}
+ if len(os.Args)!=3||(os.Args[1]!="--check"&&os.Args[1]!="--serve"){return errors.New("Expected --check or --serve and private config path")}
+ s,e:=load(os.Args[2]);if e!=nil{return e}
+ if os.Args[1]=="--check"{return json.NewEncoder(os.Stdout).Encode(map[string]interface{}{"payoutSignerCheckPassed":true,"address":s.address.Hex(),"paymentsEnabled":s.cfg.PaymentsEnabled,"transactionsSubmitted":0})}
+ if _,e=os.Lstat(s.cfg.Socket);!os.IsNotExist(e){return errors.New("Existing private socket requires inspection")}
+ listener,e:=net.Listen("unix",s.cfg.Socket);if e!=nil{return errors.New("Private payout socket could not be created")};defer listener.Close()
+ if e=os.Chmod(s.cfg.Socket,0660);e!=nil{return errors.New("Private payout socket permissions failed")}
+ server:=&http.Server{Handler:s,ReadHeaderTimeout:3*time.Second,ReadTimeout:5*time.Second,WriteTimeout:40*time.Second,IdleTimeout:15*time.Second,MaxHeaderBytes:4096}
+ return server.Serve(listener)
+}
+func main(){if e:=run();e!=nil{fmt.Fprintln(os.Stderr,"Payout signer stopped:",e);os.Exit(1)}}
+
+
+func validPayoutAddress(raw string) bool { a,e:=address(raw);return e==nil&&a!=(common.Address{}) }
