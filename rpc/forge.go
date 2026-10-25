@@ -14,6 +14,9 @@ import (
 // and hashes are kept as strings so the pool never silently truncates a
 // consensus value while crossing the JSON-RPC boundary.
 type OGGAuxBlock struct {
+	HeaderRLP   string `json:"headerRlp"`
+	OptionalSOQ bool   `json:"optionalSoq"`
+
 	ProofVersion        string `json:"proofVersion"`
 	WorkHash            string `json:"workHash"`
 	Target              string `json:"target"`

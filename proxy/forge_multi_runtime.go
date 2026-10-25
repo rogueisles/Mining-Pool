@@ -21,41 +21,66 @@ import (
 )
 
 type forgeMultiView struct {
+	profile uint8
 	symbol  string
 	bit     uint8
 	id      uint32
 	genesis string
 	client  *rpc.RPCClient
 	script  []byte
+	address string
 	tpl     forgepool.ParentTemplate
 	err     error
 }
 
-func (rt *forgeRuntime) multiViews() []forgeMultiView {
+func (rt *forgeRuntime) multiViews(heights ...uint64) []forgeMultiView {
 	views := []forgeMultiView{
 		{symbol: "DGB", bit: 1, genesis: "7497ea1b465eb39f1c8f507bc877078fe016d6fcb6dfad3a64c98dcc6e1e8496", client: rt.dgbRPC, script: rt.dgbPayout},
 		{symbol: "DOGE", bit: 2, id: 98, genesis: "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691", client: rt.dogeRPC, script: rt.dogePayout},
 	}
 	for _, a := range rt.additionalAux {
-		views = append(views, forgeMultiView{symbol: a.symbol, bit: forgepool.MultiChainBit(a.chainID), id: a.chainID, genesis: a.genesis, client: a.client, script: a.script})
+		if rt.registryBlock != 0 && (len(heights) == 0 || heights[0] < rt.registryBlock) {
+			continue
+		}
+		if a.symbol == "SOQ" && (len(heights) == 0 || rt.optionalSOQBlock == 0 || heights[0] < rt.optionalSOQBlock) {
+			continue
+		}
+		views = append(views, forgeMultiView{symbol: a.symbol, bit: forgepool.MultiChainBit(a.chainID), id: a.chainID, genesis: a.genesis, client: a.client, script: a.script, address: a.address})
 	}
+	configured := views[:0]
+	for _, v := range views {
+		if v.client != nil {
+			configured = append(configured, v)
+		}
+	}
+	views = configured
 	done := make(chan forgeMultiView, len(views))
 	for _, view := range views {
 		go func(v forgeMultiView) {
 			c := rpc.NewRPCClient(v.symbol, v.client.Url, "3s", v.client.Username, v.client.Password)
-			v.err = c.CheckAuxiliaryMainnet(v.genesis)
+			fastDGB := v.bit == 1 && rt.fastDigibyteHealth
+			if !fastDGB {
+				v.err = c.CheckAuxiliaryMainnet(v.genesis)
+			}
 			if v.err == nil && v.symbol == "DOGE" {
 				v.err = c.CheckDogecoinIdentity()
 			}
 			if v.err == nil && v.symbol == "DINGO" {
 				v.err = c.CheckDingocoinIdentity()
 			}
+			if v.err == nil && v.symbol == "SOQ" {
+				v.err = c.ValidateSOQPayout(v.address, v.script)
+			}
 			var reply *rpc.BlockTemplateReply
 			if v.err == nil {
 				if v.bit == 1 {
-					reply, v.err = c.GetDigibyteBlockTemplate()
+					if fastDGB {
+						reply, v.err = c.GetHealthyDigibyteMiningTemplate()
+					} else {
+						reply, v.err = c.GetDigibyteBlockTemplate()
+					}
 				} else {
-					reply, v.err = c.GetAuxiliaryBlockTemplate(v.symbol == "BELLS")
+					reply, v.err = c.GetAuxiliaryBlockTemplate(v.symbol == "BELLS" || v.symbol == "SOQ")
 				}
 			}
 			if v.err == nil {
@@ -75,6 +100,10 @@ func (rt *forgeRuntime) multiViews() []forgeMultiView {
 }
 
 func (s *forgeSignerClient) signMulti(req forgepool.MultiSignRequest) ([]byte, error) {
+	return s.signMultiContext(context.Background(), req)
+}
+
+func (s *forgeSignerClient) signMultiContext(ctx context.Context, req forgepool.MultiSignRequest) ([]byte, error) {
 	body, e := json.Marshal(req)
 	if e != nil {
 		return nil, e
@@ -82,7 +111,7 @@ func (s *forgeSignerClient) signMulti(req forgepool.MultiSignRequest) ([]byte, e
 	if len(body) > 16*1024*1024 {
 		return nil, errors.New("multi-chain proposal too large")
 	}
-	r, e := http.NewRequest("POST", s.url, bytes.NewReader(body))
+	r, e := http.NewRequestWithContext(ctx, "POST", s.url, bytes.NewReader(body))
 	if e != nil {
 		return nil, e
 	}
@@ -111,7 +140,11 @@ func (s *forgeSignerClient) signMulti(req forgepool.MultiSignRequest) ([]byte, e
 	if e != nil || len(sig) != 65 {
 		return nil, errors.New("invalid signer signature")
 	}
-	digest, e := forgepool.MultiDigest(req.Template, req.WorkHash)
+	signingWork, e := forgepool.MultiRequestWork(req)
+	if e != nil {
+		return nil, e
+	}
+	digest, e := forgepool.MultiDigest(req.Template, signingWork)
 	if e != nil {
 		return nil, e
 	}
@@ -144,7 +177,26 @@ func (rt *forgeRuntime) signMultiJob(job *forgeJob) error {
 	if e != nil {
 		return e
 	}
-	req := forgepool.MultiSignRequest{WorkHash: common.HexToHash(job.OGG.WorkHash), Template: t, AuxNonce: job.Digibyte.AuxNonce}
+	req := forgepool.MultiSignRequest{Registry: job.Registry, WorkHash: common.HexToHash(job.OGG.WorkHash), Template: t, AuxNonce: job.Digibyte.AuxNonce}
+	if job.Registry != nil {
+		req.RGNHeader, e = hexutil.Decode(job.OGG.HeaderRLP)
+		if e != nil {
+			return e
+		}
+		if e = forgepool.ValidateFlexibleWorkHeader(req.RGNHeader, req.WorkHash, common.HexToHash(job.OGG.PreviousBlockHash), t.ValidFrom, job.Height, rt.registryBlock); e != nil {
+			return e
+		}
+	}
+	if job.Registry == nil && rt.optionalSOQBlock != 0 && job.Height >= rt.optionalSOQBlock {
+		var err error
+		req.RGNHeader, err = hexutil.Decode(job.OGG.HeaderRLP)
+		if err != nil || !job.OGG.OptionalSOQ {
+			return errors.New("node has not authorized optional SOQ work")
+		}
+		if err = forgepool.ValidateOptionalSOQHeader(req.RGNHeader, req.WorkHash, t.ValidFrom, rt.optionalSOQBlock); err != nil {
+			return err
+		}
+	}
 	if job.ExternalMask&1 != 0 {
 		parent := job.Digibyte.Template
 		req.DGB = &parent
@@ -160,20 +212,19 @@ func (rt *forgeRuntime) signMultiJob(job *forgeJob) error {
 		req.Aux = append(req.Aux, forgepool.MultiEvidence{ChainID: ref.ChainID, Candidate: c.Template})
 	}
 	signed := &forgeSignedTemplate{Multi: &t, Template: forgepool.ExternalTemplate{ValidFrom: stamp, Expires: stamp + span}, WorkHash: job.OGG.WorkHash, Timestamp: stamp, MaxValidity: limit}
-	for _, signer := range rt.signers {
-		if !signed.fresh(forgeNow(rt.clock)) {
-			return errors.New("multi-chain authorization expired")
-		}
-		sig, err := signer.signMulti(req)
-		if err == nil {
-			signed.Signatures = append(signed.Signatures, sig)
-		}
-		if uint64(len(signed.Signatures)) >= rt.templateQuorum {
-			break
-		}
+	if !signed.fresh(forgeNow(rt.clock)) {
+		return errors.New("multi-chain authorization expired")
 	}
-	if t.Version == 4 {
-		signed.Signatures, e = forgepool.CanonicalMultiSignatures(t, req.WorkHash, signed.Signatures)
+	signed.Signatures, e = rt.collectMultiSignatures(req)
+	if e != nil {
+		return e
+	}
+	if t.Version >= 4 {
+		work, err := forgepool.MultiRequestWork(req)
+		if err != nil {
+			return err
+		}
+		signed.Signatures, e = forgepool.CanonicalMultiSignatures(t, work, signed.Signatures)
 		if e != nil {
 			return e
 		}
@@ -181,7 +232,7 @@ func (rt *forgeRuntime) signMultiJob(job *forgeJob) error {
 	if e = signed.validate(job, rt.authorized, rt.templateQuorum, forgeNow(rt.clock)); e != nil {
 		return e
 	}
-	if t.Version == 4 {
+	if t.Version >= 4 {
 		if e = job.Digibyte.BindCertificate(t, signed.Signatures); e != nil {
 			return e
 		}
@@ -190,20 +241,34 @@ func (rt *forgeRuntime) signMultiJob(job *forgeJob) error {
 	return nil
 }
 
-func (s *ProxyServer) fetchMultiTemplate() bool {
+func (s *ProxyServer) fetchMultiTemplate() (success bool) {
 	rt := s.forge
-	if rt.account.workPaused() {
+	started := time.Now()
+	var queueMS, rgnMS, nativeMS, signMS int64
+	var tracedHeight uint64
+	defer func() {
+		if rt.fastDigibyteHealth {
+			log.Printf("FORGE refresh timing success=%t height=%d total_ms=%d queue_ms=%d rgn_ms=%d native_ms=%d signing_ms=%d", success, tracedHeight, time.Since(started).Milliseconds(), queueMS, rgnMS, nativeMS, signMS)
+		}
+	}()
+	phase := time.Now()
+	paused := rt.account.workPaused()
+	queueMS = time.Since(phase).Milliseconds()
+	if paused {
 		return false
 	}
 	rt.refreshMu.Lock()
 	defer rt.refreshMu.Unlock()
 	issuer := s.rpc()
+	phase = time.Now()
 	ogg, e := issuer.CreateOGGAuxBlock()
+	rgnMS = time.Since(phase).Milliseconds()
 	if e != nil {
 		s.markSick()
 		return false
 	}
 	height, e := parseHexUint64(ogg.Height)
+	tracedHeight = height
 	if e != nil || height == 0 || height > 1<<53-1 {
 		s.markSick()
 		return false
@@ -218,8 +283,17 @@ func (s *ProxyServer) fetchMultiTemplate() bool {
 		s.markSick()
 		return false
 	}
+	if ogg.ProofVersion == "0x5" {
+		return s.fetchFlexibleTemplate(ogg, issuer, height, difficulty, stamp)
+	}
+	if rt.registryBlock != 0 && height >= rt.registryBlock {
+		s.markSick()
+		return false
+	}
 	s.markOk()
-	views := rt.multiViews()
+	phase = time.Now()
+	views := rt.multiViews(height)
+	nativeMS = time.Since(phase).Milliseconds()
 	var actual, required uint8
 	for _, v := range views {
 		h := rt.multiHealth[v.bit]
@@ -228,6 +302,13 @@ func (s *ProxyServer) fetchMultiTemplate() bool {
 			actual |= v.bit
 		} else {
 			h.failure()
+		}
+		if v.bit == forgepool.ExternalSOQ {
+			// SOQ availability never changes the mandatory revenue anchors.
+			if v.err == nil {
+				required |= v.bit
+			}
+			continue
 		}
 		if h.required() {
 			required |= v.bit
@@ -241,9 +322,12 @@ func (s *ProxyServer) fetchMultiTemplate() bool {
 		}
 		rt.clearExternalJobs()
 		s.disconnectForgeMinersForPause()
-		log.Printf("FORGE V3: no eligible DGB or DOGE anchor; OGG work paused")
+		log.Printf("FORGE V3: no eligible configured native source; RGN work paused")
 		return false
 	}
+	// If optional SOQ cannot obtain quorum, rebuild anchor-only work instead
+	// of interrupting the existing RGN/DGB/DOGE mining path.
+buildNativeJob:
 	seq := atomic.AddUint64(&rt.jobSeq, 1)
 	var parent forgepool.ParentTemplate
 	script := []byte{0x6a}
@@ -288,7 +372,28 @@ func (s *ProxyServer) fetchMultiTemplate() bool {
 		return false
 	}
 	job := &forgeJob{ProtocolV3: true, AuxSymbols: symbols, ID: fmt.Sprintf("%08x", seq), Created: forgeNow(rt.clock), Height: height, Difficulty: int64(difficulty), OGG: ogg, Digibyte: native, ExternalMask: actual, OGGRPC: issuer}
-	if e = rt.signJob(job); e != nil {
+	phase = time.Now()
+	e = rt.signJob(job)
+	signMS = time.Since(phase).Milliseconds()
+	if e != nil && actual&forgepool.ExternalSOQ != 0 {
+		filtered := make([]forgeMultiView, 0, len(views))
+		for _, v := range views {
+			if v.bit != forgepool.ExternalSOQ {
+				filtered = append(filtered, v)
+			}
+		}
+		views = filtered
+		actual &^= forgepool.ExternalSOQ
+		required &^= forgepool.ExternalSOQ
+		if !forgepool.RevenueAnchorPresent(actual) {
+			rt.clearExternalJobs()
+			s.disconnectForgeMinersForPause()
+			return false
+		}
+		log.Printf("FORGE: optional SOQ authorization unavailable; rebuilding anchor-only work")
+		goto buildNativeJob
+	}
+	if e != nil {
 		log.Printf("FORGE V3: independent authorization pending mask=%#x: %v", actual, e)
 		return false
 	}
@@ -338,6 +443,9 @@ func forgeEncodeJobProof(job *forgeJob, sol *forgeSolution) ([]byte, error) {
 		if e != nil {
 			return nil, e
 		}
+		if job.Registry != nil {
+			return forgepool.EncodeFlexibleProof(&forgepool.FlexibleProof{Multi: *p, Registry: *job.Registry})
+		}
 		return forgepool.EncodeMultiProof(p)
 	}
 	p, e := job.Digibyte.BuildOGGProof(sol.ExtraNonce1, sol.ExtraNonce2, sol.NTime, sol.Nonce, nil, job.Signed.Template, job.Signed.Signatures)
@@ -350,6 +458,16 @@ func forgeEncodeJobProof(job *forgeJob, sol *forgeSolution) ([]byte, error) {
 func forgeMultiCompatible(a, b *forgeJob) bool {
 	if !a.ProtocolV3 || !b.ProtocolV3 || a.OGG == nil || b.OGG == nil || a.Digibyte == nil || b.Digibyte == nil || a.Signed == nil || b.Signed == nil || a.Signed.Multi == nil || b.Signed.Multi == nil || !forgepool.RevenueAnchorPresent(a.ExternalMask) || a.ExternalMask != b.ExternalMask || a.OGGRPC != b.OGGRPC || !forgeRetentionHash(a.OGG.PreviousBlockHash) || !forgeRetentionHash(b.OGG.PreviousBlockHash) {
 		return false
+	}
+	if (a.Registry == nil) != (b.Registry == nil) {
+		return false
+	}
+	if a.Registry != nil {
+		aa, e := forgepool.RegistryEnvelopeHash(a.Registry)
+		bb, f := forgepool.RegistryEnvelopeHash(b.Registry)
+		if e != nil || f != nil || aa != bb {
+			return false
+		}
 	}
 	if a.Signed.Multi.Version != b.Signed.Multi.Version {
 		return false

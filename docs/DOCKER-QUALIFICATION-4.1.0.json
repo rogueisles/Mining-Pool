@@ -1,0 +1,54 @@
+{
+  "passed": true,
+  "releaseTag": "roguenetwork/rogue-network:4.1.0",
+  "builds": {
+    "roguenetwork/rogue-network:4.1.0": {
+      "imageId": "sha256:059f4eaa70fe1a9731f9e68467a4c4e544aeb311655754fbdf7a8254da3c97ad",
+      "binarySHA256": "338ada631c9c01aa5343503852de94faf7d43ff13840e3a315c3cbd5e4dc5783",
+      "user": "10001:10001",
+      "sizeBytes": 143031170
+    },
+    "rgn-local/registry-source-check:091998c0a7c842b18c43390f9b933493": {
+      "imageId": "sha256:ea11cc17b4b30d8b6ee0a6b6c1b49b32f0df7dd90234c92b23693ad67fb7f1eb",
+      "binarySHA256": "338ada631c9c01aa5343503852de94faf7d43ff13840e3a315c3cbd5e4dc5783",
+      "user": "10001:10001",
+      "sizeBytes": 142983460
+    }
+  },
+  "sourceBuildMatchesPackagedBinary": true,
+  "pinnedUbuntuBaseVerified": true,
+  "nonRootUID": 10001,
+  "dockerHealthcheckPassed": true,
+  "networkDuringRuntimeTests": "none",
+  "mainnetPeersContacted": 0,
+  "hostPortsPublished": false,
+  "chainId": 70088,
+  "existingForgeHeight": 1100100,
+  "optionalSoqBlock": null,
+  "SOQRegisteredFromActivation": true,
+  "regularMiningDisabled": true,
+  "walletSelectsBeneficiaryWithoutMining": true,
+  "invalidSettingsRejected": {
+    "WALLET=invalid": true,
+    "WALLET=0x0000000000000000000000000000000000000000": true,
+    "RGN_CACHE_MB=1": true,
+    "RGN_DATADIR=relative": true
+  },
+  "httpModules": {
+    "eth": "1.0",
+    "net": "1.0",
+    "rpc": "1.0",
+    "web3": "1.0"
+  },
+  "identityPersistsAcrossRestartAndImageReplacement": true,
+  "upgradeFromV4ProfilePreservesDataIdentity": true,
+  "gracefulSIGINTExitCode": 0,
+  "foreignGenesisRefused": true,
+  "ownedContainersAndTestVolumesRemoved": true,
+  "imageArchiveSHA256": "79390fff703475bd8bb56de6c16ddd14afd3f03c634d0577b63faa0cecde22a2",
+  "registryPushed": false,
+  "productionServicesChanged": false,
+  "checkedUnix": 1792939880.795189,
+  "registryBlock": 1121800,
+  "registryScheduledByDefault": true
+}

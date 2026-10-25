@@ -66,7 +66,7 @@ func TestForgeImmediateRefreshAndBoundedSignerRetry(t *testing.T) {
 			}))
 			defer node.Close()
 			gbt := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(map[string]interface{}{"id": 0, "result": rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n:=1; return &n }(),Version: 1, Height: 2000, CurTime: int64(fixture.Digibyte.Template.CurTime), PreviousBlockHash: strings.Repeat("aa", 32), Bits: "1d00ffff", CoinbaseValue: 5000000000}})
+				json.NewEncoder(w).Encode(map[string]interface{}{"id": 0, "result": rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n := 1; return &n }(), Version: 1, Height: 2000, CurTime: int64(fixture.Digibyte.Template.CurTime), PreviousBlockHash: strings.Repeat("aa", 32), Bits: "1d00ffff", CoinbaseValue: 5000000000}})
 			}))
 			defer gbt.Close()
 			s.upstreams = []*rpc.RPCClient{rpc.NewRPCClient("issuer", node.URL, "1s", "", "")}

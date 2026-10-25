@@ -35,18 +35,20 @@ type forgeHitSubmitter interface {
 }
 
 type forgeJob struct {
-	ProtocolV3   bool
-	AuxSymbols   map[string]uint32
-	ID           string
-	Created      time.Time
-	Clean        bool
-	Height       uint64
-	Difficulty   int64
-	OGG          *rpc.OGGAuxBlock
-	Digibyte     *forgepool.DigibyteJob
-	ExternalMask uint8 // zero = legacy V1; V2 uses forgepool.ExternalDGB/DOGE bits
-	Signed       *forgeSignedTemplate
-	OGGRPC       *rpc.RPCClient // Issued-work caches belong to this specific node.
+	Registry        *forgepool.RegistryEnvelope
+	RegistryContext *forgepool.RegistryContext
+	ProtocolV3      bool
+	AuxSymbols      map[string]uint32
+	ID              string
+	Created         time.Time
+	Clean           bool
+	Height          uint64
+	Difficulty      int64
+	OGG             *rpc.OGGAuxBlock
+	Digibyte        *forgepool.DigibyteJob
+	ExternalMask    uint8 // zero = legacy V1; V2 uses forgepool.ExternalDGB/DOGE bits
+	Signed          *forgeSignedTemplate
+	OGGRPC          *rpc.RPCClient // Issued-work caches belong to this specific node.
 }
 
 type forgeSolution struct {
@@ -60,23 +62,37 @@ type forgeSolution struct {
 	HashValue       *big.Int
 }
 
+type forgeRegisteredHit struct {
+	Symbol  string
+	ChainID uint32
+	Hit     bool
+}
 type forgeHits struct {
-	Pepecoin  bool
-	Dingocoin bool
-	Bellscoin bool
-	Digibyte  bool
-	Dogecoin  bool
-	OGG       bool
+	Registered [5]forgeRegisteredHit
+	Soqucoin   bool
+	Pepecoin   bool
+	Dingocoin  bool
+	Bellscoin  bool
+	Digibyte   bool
+	Dogecoin   bool
+	OGG        bool
 }
 
 type forgeRuntime struct {
-	allowedExternalMask uint8
-	multi               bool
-	multiHealth         map[uint8]*forgeChainHealth
-	additionalAux       []forgeAuxRuntime
-	mu                  sync.RWMutex
-	refreshRequests     chan struct{} // Coalesced post-submission refresh signal.
-	refreshMu           sync.Mutex    // A slow signer must not publish an older refresh last.
+	registryBlock                uint64
+	registryOperationFile        string
+	treasuryAddresses            map[common.Hash]string
+	treasuryScripts              map[common.Hash][]byte
+	optionalSOQBlock             uint64
+	fastDigibyteHealth           bool
+	durableShareAcknowledgements bool
+	allowedExternalMask          uint8
+	multi                        bool
+	multiHealth                  map[uint8]*forgeChainHealth
+	additionalAux                []forgeAuxRuntime
+	mu                           sync.RWMutex
+	refreshRequests              chan struct{} // Coalesced post-submission refresh signal.
+	refreshMu                    sync.Mutex    // A slow signer must not publish an older refresh last.
 
 	jobs       map[string]*forgeJob
 	order      []string
@@ -432,14 +448,15 @@ func (rt *forgeRuntime) buildV2RuntimeJob(
 }
 
 type rpcForgeSubmitter struct {
-	auxClients map[string]*rpc.RPCClient
-	refresh    func() // bounded refresh signal after all network attempts
-	issuers    []*rpc.RPCClient
-	dgb        *rpc.RPCClient
-	doge       *rpc.RPCClient
-	authorized []common.Address
-	quorum     uint64
-	clock      func() time.Time
+	auxClients    map[string]*rpc.RPCClient
+	refresh       func() // bounded refresh signal after all network attempts
+	issuers       []*rpc.RPCClient
+	dgb           *rpc.RPCClient
+	doge          *rpc.RPCClient
+	authorized    []common.Address
+	maturityDepth int64
+	quorum        uint64
+	clock         func() time.Time
 }
 
 func (r *rpcForgeSubmitter) SubmitDigibyte(job *forgeJob, sol *forgeSolution) error {
@@ -614,14 +631,22 @@ func (s *ProxyServer) initForge() error {
 
 	cfg.Digibyte = forgeEndpointDefaults(cfg.Digibyte, "digibyte")
 	cfg.Dogecoin = forgeEndpointDefaults(cfg.Dogecoin, "dogecoin")
-	if cfg.Digibyte.Url == "" || cfg.Dogecoin.Url == "" {
+	if cfg.ExternalChainPolicy != forgepool.ExternalChainPolicyRegistry && (cfg.Digibyte.Url == "" || cfg.Dogecoin.Url == "") {
 		return errors.New("FORGE requires Digibyte and Dogecoin RPC URLs")
 	}
 	dgbScript, err := parseForgeScript(cfg.Digibyte.PayoutScript)
+	if cfg.ExternalChainPolicy == forgepool.ExternalChainPolicyRegistry && cfg.Digibyte.Url == "" {
+		dgbScript = nil
+		err = nil
+	}
 	if err != nil {
 		return fmt.Errorf("invalid Digibyte payout script: %v", err)
 	}
 	dogeScript, err := parseForgeScript(cfg.Dogecoin.PayoutScript)
+	if cfg.ExternalChainPolicy == forgepool.ExternalChainPolicyRegistry && cfg.Dogecoin.Url == "" {
+		dogeScript = nil
+		err = nil
+	}
 	if err != nil {
 		return fmt.Errorf("invalid Dogecoin payout script: %v", err)
 	}
@@ -635,39 +660,79 @@ func (s *ProxyServer) initForge() error {
 	}
 
 	rt := &forgeRuntime{
-		allowedExternalMask: allowedMask,
-		jobs:                make(map[string]*forgeJob),
-		duplicates:          make(map[string]struct{}),
-		refreshRequests:     make(chan struct{}, 1),
-		dgbRPC:              rpc.NewRPCClient(cfg.Digibyte.Name, cfg.Digibyte.Url, cfg.Digibyte.Timeout, cfg.Digibyte.Username, cfg.Digibyte.Password),
-		dogeRPC:             rpc.NewRPCClient(cfg.Dogecoin.Name, cfg.Dogecoin.Url, cfg.Dogecoin.Timeout, cfg.Dogecoin.Username, cfg.Dogecoin.Password),
-		dgbPayout:           dgbScript,
-		dogePayout:          dogeScript,
-		extraNonce1Size:     cfg.ExtraNonce1Size,
-		extraNonce2Size:     cfg.ExtraNonce2Size,
-		jobBacklog:          cfg.JobBacklog,
-		retainExternalWork:  cfg.RetainExternalWork,
-		maxNTimeDrift:       time.Duration(cfg.MaxNTimeDriftSec) * time.Second,
-		shareTarget:         shareTarget,
-		signers:             signers,
-		authorized:          authorized,
-		templateQuorum:      cfg.TemplateQuorum,
-		templateValidity:    time.Duration(cfg.TemplateValiditySec) * time.Second,
-		account:             account,
+		allowedExternalMask:          allowedMask,
+		jobs:                         make(map[string]*forgeJob),
+		duplicates:                   make(map[string]struct{}),
+		refreshRequests:              make(chan struct{}, 1),
+		dgbRPC:                       rpc.NewRPCClient(cfg.Digibyte.Name, cfg.Digibyte.Url, cfg.Digibyte.Timeout, cfg.Digibyte.Username, cfg.Digibyte.Password),
+		dogeRPC:                      rpc.NewRPCClient(cfg.Dogecoin.Name, cfg.Dogecoin.Url, cfg.Dogecoin.Timeout, cfg.Dogecoin.Username, cfg.Dogecoin.Password),
+		dgbPayout:                    dgbScript,
+		dogePayout:                   dogeScript,
+		extraNonce1Size:              cfg.ExtraNonce1Size,
+		extraNonce2Size:              cfg.ExtraNonce2Size,
+		jobBacklog:                   cfg.JobBacklog,
+		retainExternalWork:           cfg.RetainExternalWork,
+		maxNTimeDrift:                time.Duration(cfg.MaxNTimeDriftSec) * time.Second,
+		shareTarget:                  shareTarget,
+		fastDigibyteHealth:           cfg.FastDigibyteHealth,
+		signers:                      signers,
+		authorized:                   authorized,
+		templateQuorum:               cfg.TemplateQuorum,
+		templateValidity:             time.Duration(cfg.TemplateValiditySec) * time.Second,
+		account:                      account,
+		durableShareAcknowledgements: cfg.DurableShareAcknowledgements,
 	}
-	submitter := &rpcForgeSubmitter{dgb: rt.dgbRPC, doge: rt.dogeRPC, issuers: s.upstreams, authorized: authorized, quorum: cfg.TemplateQuorum}
-	aux, err := auxiliaryClients(cfg.AdditionalAux)
+	if cfg.Digibyte.Url == "" {
+		rt.dgbRPC = nil
+	}
+	if cfg.Dogecoin.Url == "" {
+		rt.dogeRPC = nil
+	}
+	submitter := &rpcForgeSubmitter{dgb: rt.dgbRPC, doge: rt.dogeRPC, issuers: s.upstreams, authorized: authorized, quorum: cfg.TemplateQuorum, maturityDepth: s.config.BlockUnlocker.Depth}
+	aux, err := auxiliaryClients(cfg.AdditionalAux, cfg.ExternalChainPolicy == forgepool.ExternalChainPolicyRegistry)
 	if err != nil {
 		return err
 	}
 	rt.additionalAux = aux
+	rt.registryBlock = cfg.RegistryBlock
+	rt.treasuryAddresses = map[common.Hash]string{}
+	rt.registryOperationFile = cfg.RegistryOperationFile
+	rt.treasuryScripts = map[common.Hash][]byte{}
+	for _, raw := range append(cfg.TreasuryScripts, cfg.Digibyte.PayoutScript, cfg.Dogecoin.PayoutScript) {
+		if raw == "" {
+			continue
+		}
+		script, e := parseForgeScript(raw)
+		if e != nil {
+			return e
+		}
+		rt.treasuryScripts[common.Hash(sha256.Sum256(script))] = script
+	}
+	for _, a := range aux {
+		h := common.Hash(sha256.Sum256(a.script))
+		rt.treasuryScripts[h] = a.script
+		rt.treasuryAddresses[h] = a.address
+	}
+	if len(cfg.TreasuryDestinations) > 32 || len(cfg.TreasuryScripts) > 32 {
+		return errors.New("too many treasury destinations")
+	}
+	for _, d := range cfg.TreasuryDestinations {
+		script, e := parseForgeScript(d.Script)
+		if e != nil {
+			return e
+		}
+		h := common.Hash(sha256.Sum256(script))
+		rt.treasuryScripts[h] = script
+		rt.treasuryAddresses[h] = d.Address
+	}
+	rt.optionalSOQBlock = cfg.OptionalSOQBlock
 	if cfg.MultiChain {
 		if cfg.ExtraNonce1Size != 4 || cfg.ExtraNonce2Size != 4 {
 			return errors.New("V3 requires 4/4 extranonces")
 		}
 		rt.multi = true
 		rt.multiHealth = map[uint8]*forgeChainHealth{}
-		for _, bit := range []uint8{1, 2, 4, 8, 16} {
+		for _, bit := range []uint8{1, 2, 4, 8, 16, 32} {
 			rt.multiHealth[bit] = &forgeChainHealth{}
 		}
 	}
@@ -1277,6 +1342,15 @@ func (s *ProxyServer) validateForgeShare(cs *Session, jobID, extra2Hex, ntimeHex
 			hits.Dingocoin = hit
 		case "BELLS":
 			hits.Bellscoin = hit
+		case "SOQ":
+			hits.Soqucoin = hit
+		default:
+			for i, v := range hits.Registered {
+				if v.Symbol == "" {
+					hits.Registered[i] = forgeRegisteredHit{symbol, id, hit}
+					break
+				}
+			}
 		}
 	}
 	oggTarget, err := parseHexTarget(job.OGG.Target)

@@ -1,0 +1,157 @@
+{
+  "version": "4.1.0",
+  "activationHeight": 1121800,
+  "profileSHA256": "87c66819311b112adce09855f9c2c38490fb32a193ea35ca7c466892319aefd8",
+  "sourceCode": {
+    "Rogue-Network": {
+      "codeSHA256": "4bd6206e1bf07290bc028285858dff87d8c8488f51dc423e9f6d7ef05adb435d",
+      "fileCount": 2036,
+      "goModuleFiles": {}
+    },
+    "Mining-Pool": {
+      "codeSHA256": "59a1c0cbdc73353271a895d0c6c9882ddc59302d583a85a86f842837ebbaef00",
+      "fileCount": 185,
+      "goModuleFiles": {
+        "go.mod": "6e8e2cbd01f5f7f08b518b3d83c4291320dcc210637ef30c327291ffe53ffe00",
+        "go.sum": "e6412d414813ee232ee41621c71071091b59d3cdfe04123c84f5ec3304b870e4"
+      }
+    }
+  },
+  "binaries": {
+    "rgn-node-linux-amd64": {
+      "sha256": "338ada631c9c01aa5343503852de94faf7d43ff13840e3a315c3cbd5e4dc5783",
+      "bytes": 29364744,
+      "glibcSymbols": [
+        "GLIBC_2.11",
+        "GLIBC_2.14",
+        "GLIBC_2.16",
+        "GLIBC_2.17",
+        "GLIBC_2.2.5",
+        "GLIBC_2.29",
+        "GLIBC_2.3",
+        "GLIBC_2.3.2",
+        "GLIBC_2.3.4",
+        "GLIBC_2.32",
+        "GLIBC_2.33",
+        "GLIBC_2.34",
+        "GLIBC_2.4",
+        "GLIBC_2.7",
+        "GLIBC_2.8"
+      ]
+    },
+    "rgn-pool-linux-amd64": {
+      "sha256": "793d2acde6dc5c66dad960585c6cf465eb627ede6969591abc93a3cd9bc80377",
+      "bytes": 10139640,
+      "glibcSymbols": [
+        "GLIBC_2.14",
+        "GLIBC_2.2.5",
+        "GLIBC_2.3.2",
+        "GLIBC_2.3.4",
+        "GLIBC_2.32",
+        "GLIBC_2.34",
+        "GLIBC_2.4"
+      ]
+    },
+    "rgn-forge-signer-linux-amd64": {
+      "sha256": "00b5995c3c54bc148279fa0db2b81e9c21cedddb4085aa6f941736a1dd31adf8",
+      "bytes": 8241256,
+      "glibcSymbols": [
+        "GLIBC_2.14",
+        "GLIBC_2.2.5",
+        "GLIBC_2.3.2",
+        "GLIBC_2.3.4",
+        "GLIBC_2.32",
+        "GLIBC_2.34",
+        "GLIBC_2.4"
+      ]
+    },
+    "forge-registry-admin-linux-amd64": {
+      "sha256": "21721139feba90daf805d35544e664bf230cac85f29786414c5cca30dadeeb87",
+      "bytes": 4889600,
+      "glibcSymbols": [
+        "GLIBC_2.14",
+        "GLIBC_2.2.5",
+        "GLIBC_2.3.2",
+        "GLIBC_2.3.4",
+        "GLIBC_2.32",
+        "GLIBC_2.34",
+        "GLIBC_2.4"
+      ]
+    }
+  },
+  "buildEnvironment": {
+    "go": "1.16.15",
+    "base": "Ubuntu22.04",
+    "compiler": "GCC11",
+    "CGO": true,
+    "nodeReproduction": "canonical /node, /release/egem, fresh Go cache"
+  },
+  "regressionsPassed": true,
+  "sourceUnchangedAfterTests": true,
+  "sourceDockerByteIdentical": true,
+  "finalBinaryCrossPeerTests": [
+    {
+      "test": "cross-VPS-fresh-peer-sync",
+      "passed": true,
+      "seconds": 5.249497499986319,
+      "height": "0x23",
+      "hash": "0x0b2967be6b8c3cc40d124561aa8232e0e66e984b541de26e02ad8d3b91dce648",
+      "stateRoot": "0xa4f90dea03df2e96f92e7d11ceb1c7185589e0ed9c030c1e96262a405d1207ef"
+    },
+    {
+      "test": "final-binary-aux-work-metadata",
+      "passed": true,
+      "targetBlockTimeMillis": 12500,
+      "proofVersion": 5
+    },
+    {
+      "test": "cross-VPS-actual-mining-and-transfer",
+      "passed": true,
+      "height": "0x24",
+      "hash": "0x695090c3014dbd6df33137a669b90256fe3b0437700c1a51d068744ee905dd22",
+      "txHash": "0x60e773c726e1c522a870a3e8ccdae90bed1622226b21dba7799163c0d549edbb",
+      "receiptBlock": "0x695090c3014dbd6df33137a669b90256fe3b0437700c1a51d068744ee905dd22",
+      "controllerObservedAgreementSeconds": 3.347025900002336,
+      "mining": {
+        "accepted": true,
+        "actualStratumMiner": false,
+        "hashCountMeasured": true,
+        "hashes": 85560,
+        "labOnly": true,
+        "protocol": 5,
+        "productionPoolRuntimeTested": false
+      },
+      "nativeRegtestAcceptance": [
+        {
+          "symbol": "DGB",
+          "height": 743,
+          "hash": "15356f4da43a203117354f80bd0e13ff1507830c50c58b95d50e71b030478ec4",
+          "accepted": true
+        },
+        {
+          "symbol": "DOGE",
+          "height": 673,
+          "hash": "b7ee85e023efc203166530b42b1de81cc1585cb3a08f2b796a2bfd66172b4d76",
+          "accepted": true
+        },
+        {
+          "symbol": "SOQ",
+          "height": 738,
+          "hash": "613e924f93c3aaffe0f6c792e972beb07178cc6f9851252db714b0b17cc3777c",
+          "accepted": true
+        }
+      ]
+    },
+    {
+      "test": "cross-VPS-peer-restart-and-catchup",
+      "passed": true,
+      "height": "0x25",
+      "hash": "0xbe8ba7436b0913e5ed76a93c379b7f47e2734599dc8ada65dc32ef3424783210",
+      "controllerObservedRecoverySeconds": 15.745576500019524
+    }
+  ],
+  "testProcessesStopped": true,
+  "existingStagingServicesPreserved": true,
+  "mainnetHistoryReplayPerformed": false,
+  "mainnetSOQWinningRewardProven": false
+}

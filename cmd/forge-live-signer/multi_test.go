@@ -10,8 +10,11 @@ import (
 	"fmt"
 	"github.com/HawyUkr/open-progpow-pool/forgepool"
 	"github.com/ethereum/go-ethereum/common"
+
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/rlp"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,10 +41,24 @@ func TestV4SignerTwoChainAvailabilityAndNativeProposal(t *testing.T) {
 	}
 }
 
+func TestV4FastHealthKeepsTreasuryAndTipValidation(t *testing.T) {
+	for _, witness := range []bool{false, true} {
+		t.Run(fmt.Sprintf("witness-%v", witness), func(t *testing.T) {
+			testMultiSignerPolicy(t, forgepool.ExternalChainPolicyDGBDOGE, []string{"DGB", "DOGE"}, 3, true, witness, true)
+		})
+	}
+}
+
+func TestRegistryV5SignerNativeValidation(t *testing.T) {
+	testMultiSignerPolicy(t, forgepool.ExternalChainPolicyRegistry, []string{"DGB", "DOGE", "SOQ"}, 35, true, false, false, true)
+}
+
 func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMask uint8, certificateOptions ...bool) {
 	t.Helper()
+	v5 := len(certificateOptions) > 3 && certificateOptions[3]
 	v4 := len(certificateOptions) > 0 && certificateOptions[0]
 	witness := len(certificateOptions) > 1 && certificateOptions[1]
+	fastHealth := len(certificateOptions) > 2 && certificateOptions[2]
 	witnessFirst := sha256.Sum256(make([]byte, 64))
 	witnessDigest := sha256.Sum256(witnessFirst[:])
 	witnessScript := append([]byte{0x6a, 0x24, 0xaa, 0x21, 0xa9, 0xed}, witnessDigest[:]...)
@@ -52,9 +69,13 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 	var claimProbes uint32
 	var changeTipAfterProbe uint32
 	now := uint32(time.Now().Unix())
-	scripts := map[string]string{"DGB": "0014706267a5255e3666936bcb9a777667599f387546", "DOGE": "76a9144b1508ebe06723842994adf33bdba36b4eba44c488ac", "PEP": "76a914bb0ff0797074c03e9969359b605997b53c9eaa8488ac", "DINGO": "76a914e306e2a1a240f634da707d31079f18431317d7af88ac", "BELLS": "0014088a288ee425094ccd67779afd0c2016d010368c"}
+	scripts := map[string]string{"DGB": "0014706267a5255e3666936bcb9a777667599f387546", "DOGE": "76a9144b1508ebe06723842994adf33bdba36b4eba44c488ac", "PEP": "76a914bb0ff0797074c03e9969359b605997b53c9eaa8488ac", "DINGO": "76a914e306e2a1a240f634da707d31079f18431317d7af88ac", "BELLS": "0014088a288ee425094ccd67779afd0c2016d010368c", "SOQ": "51205dbc511fd411101f2baee0fd1914568c5437b01693b100c7786a3d19809c7596"}
 	c := validConfig()
 	c.ExternalChainPolicy = policy
+	if fullMask&32 != 0 {
+		c.OptionalSOQBlock = 1125600
+	}
+	c.FastDigibyteHealth = fastHealth
 	key, _ := crypto.HexToECDSA(strings.Repeat("0", 63) + "1")
 	for _, symbol := range symbols {
 		name := symbol
@@ -74,6 +95,8 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 			}
 			var result interface{}
 			switch req.Method {
+			case "getchainstates":
+				result = map[string]interface{}{"headers": 300000, "chainstates": []interface{}{map[string]interface{}{"blocks": 300000, "bestblockhash": strings.Repeat("11", 32), "validated": true}}}
 			case "getblockchaininfo":
 				result = map[string]interface{}{"chain": "main", "blocks": 300000, "headers": 300000, "initialblockdownload": false, "bestblockhash": strings.Repeat("11", 32)}
 			case "getblockhash":
@@ -86,6 +109,8 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 				} else {
 					result = multiGenesis[name]
 				}
+			case "validateaddress":
+				result = map[string]interface{}{"isvalid": true, "isdilithium": true, "address": "sq1ptk79z875zygp72awur73j9zk332r0vqkjwcsp3mcdg73nqyuwktq87gczj", "scriptPubKey": scripts[name]}
 			case "getnetworkinfo":
 				result = map[string]interface{}{"connections": 8}
 			case "getblockheader":
@@ -113,7 +138,7 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 						atomic.AddUint32(&claimProbes, 1)
 					}
 					if v4 && name == "DGB" {
-						if bytes.Contains(block, []byte("RGNCERT4")) {
+						if bytes.Contains(block, []byte("RGNCERT4")) || bytes.Contains(block, []byte("RGNCERT5")) {
 							checkV4NativeProposal(t, block, scripts["DGB"], witness, claim)
 							atomic.AddUint32(&certificateProposals, 1)
 						}
@@ -135,7 +160,31 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 			json.NewEncoder(w).Encode(map[string]interface{}{"id": req.ID, "result": result, "error": nil})
 		}))
 		defer server.Close()
-		c.Multi = append(c.Multi, multiEndpoint{Symbol: name, ChainID: multiIDs[name], PayoutScript: scripts[name], endpoint: endpoint{URL: server.URL, Username: "pilot", Password: "test-only", Genesis: multiGenesis[name]}})
+		c.Multi = append(c.Multi, multiEndpoint{Symbol: name, ChainID: multiIDs[name], PayoutAddress: "sq1ptk79z875zygp72awur73j9zk332r0vqkjwcsp3mcdg73nqyuwktq87gczj", PayoutScript: scripts[name], endpoint: endpoint{URL: server.URL, Username: "pilot", Password: "test-only", Genesis: multiGenesis[name]}})
+	}
+	var registry forgepool.RegistrySnapshot
+	parentHash := common.HexToHash("0xabc")
+	if v5 {
+		c.OptionalSOQBlock = 0
+		c.RegistryBlock = 1125600
+		c.RegistryChainID = 70088
+		admin, _ := crypto.HexToECDSA(strings.Repeat("0", 62) + "10")
+		registry = forgepool.RegistrySnapshot{Admin: forgepool.RegistryAdmin{Keys: []common.Address{crypto.PubkeyToAddress(admin.PublicKey)}, Quorum: 1, Epoch: 1}}
+		for i, symbol := range []string{"DGB", "DOGE", "SOQ"} {
+			script, _ := hex.DecodeString(scripts[symbol])
+			profile := forgepool.RegistryProfileBitcoin80
+			if symbol == "SOQ" {
+				profile = forgepool.RegistryProfileSOQ
+			}
+			registry.Coins = append(registry.Coins, forgepool.RegistryCoin{Slot: uint8(i + 1), ChainID: multiIDs[symbol], Genesis: common.HexToHash(multiGenesis[symbol]), Profile: profile, Core: true, EnabledFrom: 1125600, Treasury: common.Hash(sha256.Sum256(script))})
+		}
+		root, _ := forgepool.RegistrySnapshotRoot(registry)
+		raw, _ := rlp.EncodeToBytes(registry)
+		rgn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			json.NewEncoder(w).Encode(map[string]interface{}{"id": 0, "error": nil, "result": map[string]interface{}{"parentHash": parentHash, "parentHeight": fmt.Sprintf("0x%x", 1125599), "activationBlock": fmt.Sprintf("0x%x", 1125600), "root": root, "checkpoint": "0x0", "snapshotRlp": "0x" + hex.EncodeToString(raw), "genesis": common.HexToHash("0x9876"), "chainId": "0x111c8", "workSigners": []common.Address{crypto.PubkeyToAddress(key.PublicKey)}, "minDelay": "0x2", "minOperationInterval": "0x2"}})
+		}))
+		t.Cleanup(rgn.Close)
+		c.RegistryRPC = endpoint{URL: rgn.URL, Username: "test", Password: "test-only", Genesis: strings.TrimPrefix(common.HexToHash("0x9876").Hex(), "0x")}
 	}
 	if e := validateMultiConfig(c); e != nil {
 		t.Fatal(e)
@@ -155,6 +204,15 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 			p.Previous[i] = 0x11
 		}
 		req := forgepool.MultiSignRequest{WorkHash: common.HexToHash("0x1234"), AuxNonce: 7}
+		if fullMask == 35 {
+			previous := common.Hash{}
+			if v5 {
+				previous = parentHash
+			}
+			h := []interface{}{previous, common.Hash{}, common.Address{}, common.Hash{}, common.Hash{}, common.Hash{}, [256]byte{}, big.NewInt(1), big.NewInt(1125600), uint64(8000000), uint64(0), uint64(now), []byte{}, common.Hash{}, [8]byte{}}
+			req.RGNHeader, _ = rlp.EncodeToBytes(h)
+			req.WorkHash = crypto.Keccak256Hash(req.RGNHeader)
+		}
 		for _, ep := range c.Multi {
 			if ep.ChainID == 0 || mask&multiBits[ep.Symbol] == 0 {
 				continue
@@ -193,9 +251,26 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 		if v4 {
 			builder = forgepool.BuildMultiParentV4
 		}
+		if v5 {
+			builder = forgepool.BuildMultiParentV5
+		}
 		job, e := builder(p, req.WorkHash.Hex(), aux, script, 7, 4, 4, mask&1 != 0)
 		if e != nil {
 			t.Fatal(e)
+		}
+		if v5 {
+			root, _ := forgepool.RegistrySnapshotRoot(registry)
+			req.Registry = &forgepool.RegistryEnvelope{Root: root}
+			for _, coin := range registry.Coins {
+				bit := multiBits[map[uint8]string{1: "DGB", 2: "DOGE", 3: "SOQ"}[coin.Slot]]
+				if mask&bit != 0 {
+					m, _ := forgepool.RegistryMembershipFor(registry, coin.Slot)
+					req.Registry.Members = append(req.Registry.Members, m)
+				}
+			}
+			if err := job.BindRegistry(req.Registry); err != nil {
+				t.Fatal(err)
+			}
 		}
 		req.Template, e = job.MultiTemplate(uint64(now), uint64(now)+300)
 		if e != nil {
@@ -205,24 +280,31 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 		return req
 	}
 	for mask := uint8(1); mask <= fullMask; mask++ {
+		if mask & ^fullMask != 0 {
+			continue
+		}
 		t.Run(fmt.Sprintf("mask-%02x", mask), func(t *testing.T) {
 			atomic.StoreUint32(&active, uint32(mask))
 			s := fresh()
 			req := request(mask)
 			for i := 0; i < 3; i++ {
 				sig, e := s.validateAndSign(context.Background(), req)
-				if mask&3 == 0 {
+				if mask&35 == 0 {
 					if e == nil || len(sig) != 0 {
 						t.Fatal("bonus-only mask signed", mask)
 					}
-				} else if i < 2 && mask != fullMask {
+				} else if i < 2 && len(req.RGNHeader) == 0 && mask&(fullMask&^32) != fullMask&^32 {
 					if e == nil {
 						t.Fatal("reduced work authorized before independent exclusion")
 					}
 				} else if e != nil || len(sig) != 65 {
 					t.Fatal("nonempty independently observed subset refused", e)
 				} else if v4 {
-					digest, err := forgepool.MultiDigest(req.Template, req.WorkHash)
+					work, err := forgepool.MultiRequestWork(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					digest, err := forgepool.MultiDigest(req.Template, work)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -237,7 +319,7 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 						t.Fatal(err)
 					}
 					proof, err := lastJob.BuildMultiProof(make([]byte, 4), make([]byte, 4), lastJob.Template.CurTime, 0, req.Template, [][]byte{sig})
-					if err != nil || proof.Template.Version != 4 {
+					if err != nil || (proof.Template.Version != 4 && !v5) || (v5 && proof.Template.Version != 5) {
 						t.Fatal("validated V4 request did not produce bound proof", err)
 					}
 					if mask == 2 && (len(lastJob.Coinbase.Outputs) != 2 || lastJob.Coinbase.Outputs[0].Value != 0 || lastJob.Coinbase.Outputs[1].Value != 0) {
@@ -261,19 +343,19 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 		t.Fatal("unvalidated parent body signed")
 	}
 	// The pool cannot omit an available chain from the signed template.
-	if _, e := s.validateAndSign(context.Background(), request(2)); e == nil {
-		t.Fatal("pool chose reduced mask despite healthy sources")
+	if _, e := s.validateAndSign(context.Background(), request(2)); (e == nil) != (fullMask == 35) {
+		t.Fatal("healthy source selection policy differs", fullMask, e)
 	}
 	// A responsive node with an unusable treasury-paying native body must not
 	// prevent the remaining chains from carrying shared work.
 	rejected, remaining := uint32(16), uint8(15)
-	if fullMask == 3 {
+	if fullMask == 3 || fullMask == 35 {
 		rejected, remaining = 1, 2
 	}
 	atomic.StoreUint32(&rejectProposal, rejected)
 	for i := 0; i < 3; i++ {
 		_, e := s.validateAndSign(context.Background(), request(remaining))
-		if i < 2 && e == nil {
+		if i < 2 && fullMask != 35 && e == nil {
 			t.Fatal("native-body exclusion happened too early")
 		}
 		if i == 2 && e != nil {
@@ -288,7 +370,7 @@ func testMultiSignerPolicy(t *testing.T, policy string, symbols []string, fullMa
 		}
 	}
 	atomic.StoreUint32(&active, 2)
-	if _, e := s.validateAndSign(context.Background(), request(2)); e == nil {
+	if _, e := s.validateAndSign(context.Background(), request(2)); !v5 && e == nil {
 		t.Fatal("restored before two successful observations")
 	}
 	if _, e := s.validateAndSign(context.Background(), request(2)); e != nil {
@@ -412,9 +494,13 @@ func checkV4NativeProposal(t *testing.T, block []byte, payoutHex string, witness
 	for i := 0; i < outputs; i++ {
 		value := binary.LittleEndian.Uint64(read(8))
 		script := read(compact())
-		if bytes.Contains(script, []byte("RGNCERT4")) {
+		if bytes.Contains(script, []byte("RGNCERT4")) || bytes.Contains(script, []byte("RGNCERT5")) {
+			tag := []byte("RGNCERT4")
+			if bytes.Contains(script, []byte("RGNCERT5")) {
+				tag = []byte("RGNCERT5")
+			}
 			certificateCount++
-			if value != 0 || len(script) != 42 || !bytes.Equal(script[:10], append([]byte{0x6a, 40}, []byte("RGNCERT4")...)) || !bytes.Equal(script[10:], make([]byte, 32)) {
+			if value != 0 || len(script) != 42 || !bytes.Equal(script[:10], append([]byte{0x6a, 40}, tag...)) || !bytes.Equal(script[10:], make([]byte, 32)) {
 				t.Fatal("invalid V4 proposal certificate placeholder")
 			}
 		}
@@ -493,4 +579,8 @@ func nativeFixtureClaim(t *testing.T, block []byte, auxiliary bool) int64 {
 		total += out.Value
 	}
 	return total
+}
+
+func TestOptionalSOQSignerIndependentNativeValidation(t *testing.T) {
+	testMultiSignerPolicy(t, forgepool.ExternalChainPolicyDGBDOGESQ, []string{"DGB", "DOGE", "SOQ"}, 35, true, true, true)
 }

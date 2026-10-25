@@ -1,0 +1,20 @@
+{
+  "version": "4.1.0",
+  "format": "Git index canonical bytes; SHA256",
+  "excludedAdministrativeManifests": [
+    "PUBLICATION-MANIFEST.json",
+    "SOURCE-MANIFEST-SHA256.json",
+    "SOURCE-SHA256SUMS"
+  ],
+  "excludedRuntimeMaterial": [
+    ".git/",
+    "build/_workspace/",
+    "build/bin/",
+    "private runtime keys and credentials",
+    "temporary databases and generated caches"
+  ],
+  "knownPublicTestFixturesPreserved": true,
+  "approvedDockerPayloadIncluded": false,
+  "sourceCodeSHA256": "59a1c0cbdc73353271a895d0c6c9882ddc59302d583a85a86f842837ebbaef00",
+  "qualification": "docs/RELEASE-QUALIFICATION-4.1.0.md"
+}

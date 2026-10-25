@@ -35,14 +35,20 @@ type endpoint struct {
 	Genesis  string `json:"genesis"`
 }
 type config struct {
-	ExternalChainPolicy string          `json:"externalChainPolicy,omitempty"`
-	Multi               []multiEndpoint `json:"multi,omitempty"`
-	KeyFile             string          `json:"keyFile"`
-	Listen              string          `json:"listen"`
-	SignerAddress       string          `json:"signerAddress"`
-	DogeScript          string          `json:"dogeScript"`
-	Digibyte            endpoint        `json:"digibyte"`
-	Dogecoin            endpoint        `json:"dogecoin"`
+	RegistryBlock        uint64                `json:"registryBlock,omitempty"`
+	RegistryChainID      uint64                `json:"registryChainId,omitempty"`
+	RegistryRPC          endpoint              `json:"registryRpc,omitempty"`
+	TreasuryDestinations []treasuryDestination `json:"treasuryDestinations,omitempty"`
+	OptionalSOQBlock     uint64                `json:"optionalSoqBlock,omitempty"`
+	FastDigibyteHealth   bool                  `json:"fastDigibyteHealth"`
+	ExternalChainPolicy  string                `json:"externalChainPolicy,omitempty"`
+	Multi                []multiEndpoint       `json:"multi,omitempty"`
+	KeyFile              string                `json:"keyFile"`
+	Listen               string                `json:"listen"`
+	SignerAddress        string                `json:"signerAddress"`
+	DogeScript           string                `json:"dogeScript"`
+	Digibyte             endpoint              `json:"digibyte"`
+	Dogecoin             endpoint              `json:"dogecoin"`
 }
 
 func (e endpoint) validate() error {
@@ -68,7 +74,7 @@ func (c config) validate() error {
 	if _, err := forgepool.ExternalChainPolicyMask(c.ExternalChainPolicy); err != nil {
 		return err
 	}
-	if c.ExternalChainPolicy == forgepool.ExternalChainPolicyDGBDOGE {
+	if c.ExternalChainPolicy == forgepool.ExternalChainPolicyDGBDOGE || c.ExternalChainPolicy == forgepool.ExternalChainPolicyDGBDOGESQ {
 		if err := validateMultiConfig(c); err != nil {
 			return err
 		}
@@ -81,6 +87,9 @@ func (c config) validate() error {
 	}
 	if c.KeyFile == "" || !common.IsHexAddress(c.SignerAddress) || common.HexToAddress(c.SignerAddress) == (common.Address{}) {
 		return errors.New("key path and expected signer address required")
+	}
+	if c.ExternalChainPolicy == forgepool.ExternalChainPolicyRegistry {
+		return validateFlexibleConfig(c)
 	}
 	script, err := hex.DecodeString(c.DogeScript)
 	if err != nil || len(script) != 25 || script[0] != 0x76 || script[1] != 0xa9 || script[2] != 0x14 || script[23] != 0x88 || script[24] != 0xac {

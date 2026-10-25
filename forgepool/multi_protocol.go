@@ -11,9 +11,15 @@ import (
 	"sort"
 )
 
-const MultiExternalMask uint8 = 31
+const MultiExternalMask uint8 = 63
+const SOQAuxChainID uint32 = 21329
+const ExternalSOQ uint8 = 32
+const SOQMainnetGenesis = "0d828600816cbd7c23789660b53f90cb6ec7ff85540698e13845eb2d2f0486a8"
 const MultiDomain = "OGG-FORGE-MULTI-TEMPLATE-V3-WORK"
 const MultiDomainV4 = "RGN-FORGE-MULTI-TEMPLATE-V4-WORK"
+const MultiDomainV5 = "RGN-FORGE-MULTI-TEMPLATE-V5-WORK"
+const FlexibleCoreMask uint8 = 35
+const MaxFlexibleAuxChains = 6
 const MaxTemplateSigners = 16
 
 type MultiAuxRef struct {
@@ -55,6 +61,11 @@ type MultiEvidence struct {
 	Candidate ParentTemplate
 }
 type MultiSignRequest struct {
+	// RGNHeader is the unsealed header, bound by WorkHash. It allows signers
+	// to enforce the optional-SOQ height without trusting a caller's number.
+	Registry  *RegistryEnvelope `json:",omitempty"`
+	RGNHeader []byte            `json:",omitempty"`
+
 	WorkHash common.Hash
 	Template MultiTemplate
 	AuxNonce uint32
@@ -72,11 +83,13 @@ func MultiChainBit(id uint32) uint8 {
 		return 8
 	case 16:
 		return 16
+	case SOQAuxChainID:
+		return ExternalSOQ
 	}
 	return 0
 }
 func MultiTemplateValid(t MultiTemplate) error {
-	if (t.Version != 3 && t.Version != 4) || t.Mask == 0 || t.Mask & ^MultiExternalMask != 0 || t.ValidFrom == 0 || t.Expires <= t.ValidFrom || t.Expires-t.ValidFrom > 300 {
+	if (t.Version != 3 && t.Version != 4 && t.Version != 5) || t.Mask == 0 || t.Mask & ^MultiExternalMask != 0 || t.ValidFrom == 0 || t.Expires <= t.ValidFrom || t.Expires-t.ValidFrom > 300 {
 		return errors.New("invalid multi-chain participation or validity")
 	}
 	if t.ParentCoinbaseHash == (common.Hash{}) || t.ParentBranchHash == (common.Hash{}) || t.ExtraSize < 1 || t.ExtraSize > 24 || t.ExtraOffset < 42 || t.ExtraOffset > 142 {
@@ -89,12 +102,18 @@ func MultiTemplateValid(t MultiTemplate) error {
 	} else if t.DGBPrevHash != (common.Hash{}) || t.DGBBits != 0 || t.ParentMinTime != 0 {
 		return errors.New("inactive DGB carries signed parent fields")
 	}
+	if t.Version == 5 && (t.Mask & ^FlexibleCoreMask != 0 || (len(t.Aux)+int(t.Mask&1) > RegistryMaxMembers)) {
+		return errors.New("invalid bounded flexible-chain participation")
+	}
 	mask := t.Mask & 1
 	var prev uint32
 	for _, a := range t.Aux {
 		bit := MultiChainBit(a.ChainID)
-		if bit == 0 || a.ChainID <= prev || a.Hash == (common.Hash{}) || mask&bit != 0 {
+		if (t.Version != 5 && bit == 0) || a.ChainID == 0 || a.ChainID > 65535 || a.ChainID == OGGAuxChainID || a.ChainID <= prev || a.Hash == (common.Hash{}) || (bit != 0 && mask&bit != 0) {
 			return errors.New("invalid or duplicate auxiliary identity")
+		}
+		if t.Version == 5 {
+			bit &= FlexibleCoreMask
 		}
 		mask |= bit
 		prev = a.ChainID
@@ -114,6 +133,8 @@ func MultiDigest(t MultiTemplate, work common.Hash) (common.Hash, error) {
 	domain := MultiDomain
 	if t.Version == 4 {
 		domain = MultiDomainV4
+	} else if t.Version == 5 {
+		domain = MultiDomainV5
 	}
 	payload := struct {
 		Domain   []byte
@@ -134,7 +155,7 @@ func ValidateMultiSignatures(t MultiTemplate, work common.Hash, sigs [][]byte, a
 	if t.ValidFrom != stamp || quorum == 0 || quorum > uint64(len(allowed)) {
 		return errors.New("invalid multi-chain work timestamp or quorum")
 	}
-	strict := t.Version == 4
+	strict := t.Version >= 4
 	if strict && (len(allowed) > MaxTemplateSigners || uint64(len(sigs)) != quorum) {
 		return errors.New("invalid bounded multi-chain certificate size")
 	}
@@ -173,6 +194,13 @@ func ValidateMultiSignatures(t MultiTemplate, work common.Hash, sigs [][]byte, a
 	return nil
 }
 func BuildMultiParent(tpl ParentTemplate, work string, aux map[uint32]*DogeCandidate, script []byte, nonce uint32, extra1, extra2 int, dgb bool) (*DigibyteJob, error) {
+	return buildMultiParent(tpl, work, aux, script, nonce, extra1, extra2, dgb, false)
+}
+
+func buildMultiParent(tpl ParentTemplate, work string, aux map[uint32]*DogeCandidate, script []byte, nonce uint32, extra1, extra2 int, dgb, flexible bool) (*DigibyteJob, error) {
+	if flexible && len(aux) > MaxFlexibleAuxChains {
+		return nil, errors.New("too many flexible auxiliaries")
+	}
 	leaf, err := ParseRawHashHex(work)
 	if err != nil {
 		return nil, err
@@ -184,7 +212,7 @@ func BuildMultiParent(tpl ParentTemplate, work string, aux map[uint32]*DogeCandi
 	other := map[uint32]*DogeCandidate{}
 	var doge *DogeCandidate
 	for id, c := range aux {
-		if c == nil || MultiChainBit(id) == 0 || uint32(c.Version)>>16 != id {
+		if c == nil || (!flexible && MultiChainBit(id) == 0) || id == 0 || id > 65535 || id == OGGAuxChainID || uint32(c.Version)>>16 != id {
 			return nil, errors.New("unsupported native auxiliary candidate")
 		}
 		leaves[id] = c.Hash
@@ -195,6 +223,9 @@ func BuildMultiParent(tpl ParentTemplate, work string, aux map[uint32]*DogeCandi
 		}
 	}
 	tree, err := NewAuxTree(leaves, nonce)
+	if err == nil && flexible && tree.Size > 32 {
+		return nil, errors.New("flexible auxiliary tree exceeds bounded capacity")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -206,14 +237,14 @@ func BuildMultiParent(tpl ParentTemplate, work string, aux map[uint32]*DogeCandi
 }
 func (j *DigibyteJob) MultiTemplate(stamp, expires uint64) (MultiTemplate, error) {
 	version := uint8(3)
-	if j.ProtocolVersion == 4 {
-		version = 4
+	if j.ProtocolVersion == 4 || j.ProtocolVersion == 5 {
+		version = j.ProtocolVersion
 	}
 	t := MultiTemplate{Version: version, ValidFrom: stamp, Expires: expires}
 	plan := j.Coinbase
-	if version == 4 {
+	if version >= 4 {
 		var e error
-		plan, e = certificatePlan(j.Coinbase, common.Hash{})
+		plan, e = certificatePlanVersion(j.Coinbase, common.Hash{}, version)
 		if e != nil {
 			return t, e
 		}
@@ -256,13 +287,17 @@ func (j *DigibyteJob) MultiTemplate(stamp, expires uint64) (MultiTemplate, error
 	sort.Ints(ids)
 	for _, id := range ids {
 		c := candidates[uint32(id)]
-		t.Mask |= MultiChainBit(uint32(id))
+		bit := MultiChainBit(uint32(id))
+		if version == 5 {
+			bit &= FlexibleCoreMask
+		}
+		t.Mask |= bit
 		t.Aux = append(t.Aux, MultiAuxRef{uint32(id), common.HexToHash(c.DisplayHash)})
 	}
 	return t, MultiTemplateValid(t)
 }
 func (j *DigibyteJob) BuildMultiProof(extra1, extra2 []byte, ntime, nonce uint32, t MultiTemplate, sigs [][]byte) (*MultiProof, error) {
-	if t.Version == 4 {
+	if t.Version >= 4 {
 		if e := j.CheckCertificate(t, sigs); e != nil {
 			return nil, e
 		}
@@ -359,8 +394,9 @@ func DecodeMultiHex(s string) (*MultiProof, error) {
 	return &p, e
 }
 
-// RevenueAnchorPresent requires supported DGB or DOGE participation. Bonus
-// auxiliary chains cannot satisfy OGG issuance by themselves.
+// RevenueAnchorPresent recognizes the supported native revenue sources.
+// SOQ additionally requires the explicit pool policy and a header-bound future
+// activation check before signing. Legacy PEP/DINGO/BELLS remain bonus-only.
 func RevenueAnchorPresent(mask uint8) bool {
-	return mask & ^MultiExternalMask == 0 && mask&3 != 0
+	return mask & ^MultiExternalMask == 0 && mask&35 != 0
 }

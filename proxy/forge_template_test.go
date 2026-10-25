@@ -245,7 +245,7 @@ func TestForgeRefreshPublishesOnlySignedCompatibleWork(t *testing.T) {
 			}))
 			defer nodeServer.Close()
 			gbtServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				json.NewEncoder(w).Encode(map[string]interface{}{"jsonrpc": "2.0", "id": 0, "result": rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n:=1; return &n }(),Version: 1, Height: 2000, CurTime: int64(fixture.Digibyte.Template.CurTime), PreviousBlockHash: strings.Repeat("22", 32), Bits: "1d00ffff", CoinbaseValue: 5000000000}})
+				json.NewEncoder(w).Encode(map[string]interface{}{"jsonrpc": "2.0", "id": 0, "result": rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n := 1; return &n }(), Version: 1, Height: 2000, CurTime: int64(fixture.Digibyte.Template.CurTime), PreviousBlockHash: strings.Repeat("22", 32), Bits: "1d00ffff", CoinbaseValue: 5000000000}})
 			}))
 			defer gbtServer.Close()
 			rt := s.forge

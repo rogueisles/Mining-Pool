@@ -70,7 +70,7 @@ func newForgeTransitionHarness(
 	))
 	t.Cleanup(nodeServer.Close)
 
-	reply := rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n:=1; return &n }(),
+	reply := rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n := 1; return &n }(),
 		Version:           1,
 		Height:            2000,
 		CurTime:           int64(fixture.Digibyte.Template.CurTime),

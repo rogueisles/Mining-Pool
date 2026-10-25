@@ -49,6 +49,12 @@ func (item *forgeQueuedShare) creditSnapshot() (storage.ForgeShare, error) {
 			s.Dingocoin = outcome
 		} else if b.Chain == "BELLS" {
 			s.Bellscoin = outcome
+		} else if b.Chain == "SOQ" {
+			s.Soqucoin = outcome
+		} else if storage.ValidRegisteredSymbol(b.Chain) {
+			if err := s.SetRegistered(b.Chain, b.ChainID, outcome); err != nil {
+				return s, err
+			}
 		}
 	}
 	return s, s.Validate()
@@ -62,21 +68,27 @@ func sameNativeCredit(a, b storage.ForgeShare) bool {
 	a.Pepecoin = storage.ForgeSubmission{}
 	a.Dingocoin = storage.ForgeSubmission{}
 	a.Bellscoin = storage.ForgeSubmission{}
+	a.Soqucoin = storage.ForgeSubmission{}
 	b.Pepecoin = storage.ForgeSubmission{}
 	b.Dingocoin = storage.ForgeSubmission{}
 	b.Bellscoin = storage.ForgeSubmission{}
+	b.Soqucoin = storage.ForgeSubmission{}
+	a.Registered = [5]storage.ForgeRegisteredSubmission{}
+	b.Registered = [5]storage.ForgeRegisteredSubmission{}
 	return a == b
 }
 
 // Last external observations published to Redis. Never used for share credit.
 type forgeExternalObservation struct {
-	Pepecoin  storage.ForgeSubmission `json:"pepecoin"`
-	Dingocoin storage.ForgeSubmission `json:"dingocoin"`
-	Bellscoin storage.ForgeSubmission `json:"bellscoin"`
-	Digibyte  storage.ForgeSubmission `json:"digibyte"`
-	Dogecoin  storage.ForgeSubmission `json:"dogecoin"`
+	Registered [5]storage.ForgeRegisteredSubmission `json:"registered,omitempty"`
+	Soqucoin   storage.ForgeSubmission              `json:"soqucoin"`
+	Pepecoin   storage.ForgeSubmission              `json:"pepecoin"`
+	Dingocoin  storage.ForgeSubmission              `json:"dingocoin"`
+	Bellscoin  storage.ForgeSubmission              `json:"bellscoin"`
+	Digibyte   storage.ForgeSubmission              `json:"digibyte"`
+	Dogecoin   storage.ForgeSubmission              `json:"dogecoin"`
 }
 
 func externalObservation(s storage.ForgeShare) forgeExternalObservation {
-	return forgeExternalObservation{Digibyte: s.Digibyte, Dogecoin: s.Dogecoin, Pepecoin: s.Pepecoin, Dingocoin: s.Dingocoin, Bellscoin: s.Bellscoin}
+	return forgeExternalObservation{Registered: s.Registered, Digibyte: s.Digibyte, Dogecoin: s.Dogecoin, Pepecoin: s.Pepecoin, Dingocoin: s.Dingocoin, Bellscoin: s.Bellscoin, Soqucoin: s.Soqucoin}
 }

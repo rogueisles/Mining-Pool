@@ -13,16 +13,23 @@ import (
 
 // ForgeShare is an immutable accounting receipt, journaled after all chain
 // submissions. External outcomes are submission acknowledgements, not rewards.
+type ForgeRegisteredSubmission struct {
+	Chain   string          `json:"chain"`
+	ChainID uint32          `json:"chainId"`
+	Result  ForgeSubmission `json:"result"`
+}
+
 type ForgeShare struct {
-	ID              string `json:"id"`
-	Login           string `json:"login"`
-	Worker          string `json:"worker"`
-	Height          int64  `json:"height"`
-	Difficulty      int64  `json:"difficulty"`
-	RoundDifficulty int64  `json:"roundDifficulty"`
-	TimestampMS     int64  `json:"timestampMs"`
-	WindowSeconds   int64  `json:"windowSeconds"`
-	WorkHash        string `json:"workHash"`
+	Registered      [5]ForgeRegisteredSubmission `json:"registered,omitempty"`
+	ID              string                       `json:"id"`
+	Login           string                       `json:"login"`
+	Worker          string                       `json:"worker"`
+	Height          int64                        `json:"height"`
+	Difficulty      int64                        `json:"difficulty"`
+	RoundDifficulty int64                        `json:"roundDifficulty"`
+	TimestampMS     int64                        `json:"timestampMs"`
+	WindowSeconds   int64                        `json:"windowSeconds"`
+	WorkHash        string                       `json:"workHash"`
 	// ProofHash is Keccak256 of the exact accepted OGGF envelope. Empty means
 	// no acknowledged native block and must never close an OGG payout round.
 	ProofHash string          `json:"proofHash,omitempty"`
@@ -31,6 +38,7 @@ type ForgeShare struct {
 	Pepecoin  ForgeSubmission `json:"pepecoin"`
 	Dingocoin ForgeSubmission `json:"dingocoin"`
 	Bellscoin ForgeSubmission `json:"bellscoin"`
+	Soqucoin  ForgeSubmission `json:"soqucoin"`
 	OGGError  string          `json:"oggError,omitempty"`
 }
 
@@ -79,7 +87,24 @@ func (s ForgeShare) Validate() error {
 		s.WindowSeconds <= 0 || s.WindowSeconds > 365*24*3600 {
 		return errors.New("invalid FORGE receipt quantities")
 	}
-	for _, result := range []ForgeSubmission{s.Digibyte, s.Dogecoin, s.Pepecoin, s.Dingocoin, s.Bellscoin} {
+	results := []ForgeSubmission{}
+	seen := map[uint32]bool{}
+	seenSymbols := map[string]bool{}
+	for _, extra := range s.Registered {
+		if extra.Chain == "" {
+			if extra.ChainID != 0 || extra.Result != (ForgeSubmission{}) {
+				return errors.New("partial registered outcome")
+			}
+			continue
+		}
+		if !ValidRegisteredSymbol(extra.Chain) || extra.ChainID == 0 || extra.ChainID > 65535 || extra.ChainID == 98 || extra.ChainID == 21329 || extra.ChainID == 20295 || seen[extra.ChainID] || seenSymbols[extra.Chain] {
+			return errors.New("invalid registered outcome identity")
+		}
+		seen[extra.ChainID] = true
+		seenSymbols[extra.Chain] = true
+		results = append(results, extra.Result)
+	}
+	for _, result := range append(results, []ForgeSubmission{s.Digibyte, s.Dogecoin, s.Pepecoin, s.Dingocoin, s.Bellscoin, s.Soqucoin}...) {
 		if result.Observation != "" && (result.Observation != "noncanonical" || !result.Attempted || result.Accepted || result.Error == "") {
 			return errors.New("invalid external observation")
 		}
@@ -99,7 +124,7 @@ func (s ForgeShare) Validate() error {
 // runtime error. Dedup receipts deliberately have no TTL; delayed journal
 // replay must not pay again. Retention/archival is a separate operational gate.
 const writeForgeShareScript = forgePackedMembership + `
-local types = {'hash','hash','zset','zset','hash','hash','zset','hash','zset','hash','hash','string','hash','hash','hash'}
+local types = {'hash','hash','zset','zset','hash','hash','zset','hash','zset','hash','hash','string','hash','hash','hash','hash','hash'}
 for i,t in ipairs(types) do
   local actual = redis.call('TYPE', KEYS[i]).ok
   if actual ~= 'none' and actual ~= t then return redis.error_reply('FORGE wrong key type '..i) end
@@ -154,6 +179,8 @@ if ARGV[13] ~= '' then redis.call('HSET', KEYS[11], ARGV[1], ARGV[13]) end
 if ARGV[14]~='' then redis.call('HSET',KEYS[13],ARGV[1],ARGV[14]) end
 if ARGV[15]~='' then redis.call('HSET',KEYS[14],ARGV[1],ARGV[15]) end
 if ARGV[16]~='' then redis.call('HSET',KEYS[15],ARGV[1],ARGV[16]) end
+if ARGV[17]~='' then redis.call('HSET',KEYS[16],ARGV[1],ARGV[17]) end
+if ARGV[18]~='' then redis.call('HSET',KEYS[17],ARGV[1],ARGV[18]) end
 redis.call('HSET', KEYS[1], ARGV[1], '1')
 return 0
 `
@@ -181,11 +208,11 @@ func (r *RedisClient) WriteForgeShare(s ForgeShare) (bool, error) {
 		r.formatKey("blocks", "candidates"), r.formatKey("forge", "submissions", "dgb", s.Height),
 		r.formatKey("forge", "submissions", "doge", s.Height),
 		r.forgeDedupArchiveKey(s.Height, s.ID[:2]),
-		r.formatKey("forge", "submissions", "pep", s.Height), r.formatKey("forge", "submissions", "dingo", s.Height), r.formatKey("forge", "submissions", "bells", s.Height),
+		r.formatKey("forge", "submissions", "pep", s.Height), r.formatKey("forge", "submissions", "dingo", s.Height), r.formatKey("forge", "submissions", "bells", s.Height), r.formatKey("forge", "submissions", "soq", s.Height), r.formatKey("forge", "submissions", "registered", s.Height),
 	}
 	i := func(v int64) string { return strconv.FormatInt(v, 10) }
 	args := []string{s.ID, s.Login, s.Worker, i(s.Difficulty), i(s.TimestampMS), i(s.WindowSeconds),
-		i(s.Height), s.WorkHash, s.ProofHash, ForgeRoundID(s.ProofHash), i(s.RoundDifficulty), encode(s.Digibyte), encode(s.Dogecoin), encode(s.Pepecoin), encode(s.Dingocoin), encode(s.Bellscoin)}
+		i(s.Height), s.WorkHash, s.ProofHash, ForgeRoundID(s.ProofHash), i(s.RoundDifficulty), encode(s.Digibyte), encode(s.Dogecoin), encode(s.Pepecoin), encode(s.Dingocoin), encode(s.Bellscoin), encode(s.Soqucoin), encodeRegisteredSubmissions(s)}
 	val, err := r.client.Eval(writeForgeShareScript, keys, args).Result()
 	if err != nil {
 		return false, err
@@ -215,9 +242,9 @@ func (r *RedisClient) WriteForgeExternalOutcomes(s ForgeShare) error {
 		}{v, s.Login, s.Worker, s.TimestampMS})
 		return string(blob)
 	}
-	keys := []string{r.formatKey("forge", "credited", s.Height), r.forgeDedupArchiveKey(s.Height, s.ID[:2]), r.formatKey("forge", "submissions", "dgb", s.Height), r.formatKey("forge", "submissions", "doge", s.Height), r.formatKey("forge", "submissions", "pep", s.Height), r.formatKey("forge", "submissions", "dingo", s.Height), r.formatKey("forge", "submissions", "bells", s.Height)}
+	keys := []string{r.formatKey("forge", "credited", s.Height), r.forgeDedupArchiveKey(s.Height, s.ID[:2]), r.formatKey("forge", "submissions", "dgb", s.Height), r.formatKey("forge", "submissions", "doge", s.Height), r.formatKey("forge", "submissions", "pep", s.Height), r.formatKey("forge", "submissions", "dingo", s.Height), r.formatKey("forge", "submissions", "bells", s.Height), r.formatKey("forge", "submissions", "soq", s.Height), r.formatKey("forge", "submissions", "registered", s.Height)}
 	_, err := r.client.Eval(forgePackedMembership+`
-local types={'hash','string','hash','hash','hash','hash','hash'}
+local types={'hash','string','hash','hash','hash','hash','hash','hash','hash'}
 for i,t in ipairs(types) do
  local actual=redis.call('TYPE',KEYS[i]).ok
  if actual~='none' and actual~=t then return redis.error_reply('FORGE wrong outcome key type') end
@@ -232,6 +259,45 @@ if ARGV[3]~='' then redis.call('HSET',KEYS[4],ARGV[1],ARGV[3]) end
 if ARGV[4]~='' then redis.call('HSET',KEYS[5],ARGV[1],ARGV[4]) end
 if ARGV[5]~='' then redis.call('HSET',KEYS[6],ARGV[1],ARGV[5]) end
 if ARGV[6]~='' then redis.call('HSET',KEYS[7],ARGV[1],ARGV[6]) end
-return 0`, keys, []string{s.ID, encode(s.Digibyte), encode(s.Dogecoin), encode(s.Pepecoin), encode(s.Dingocoin), encode(s.Bellscoin)}).Result()
+if ARGV[7]~='' then redis.call('HSET',KEYS[8],ARGV[1],ARGV[7]) end
+if ARGV[8]~='' then redis.call('HSET',KEYS[9],ARGV[1],ARGV[8]) end
+return 0`, keys, []string{s.ID, encode(s.Digibyte), encode(s.Dogecoin), encode(s.Pepecoin), encode(s.Dingocoin), encode(s.Bellscoin), encode(s.Soqucoin), encodeRegisteredSubmissions(s)}).Result()
 	return err
+}
+
+func ValidRegisteredSymbol(symbol string) bool {
+	if len(symbol) < 2 || len(symbol) > 12 || symbol == "DGB" || symbol == "DOGE" || symbol == "OGG" || symbol == "SOQ" || symbol == "PEP" || symbol == "DINGO" || symbol == "BELLS" {
+		return false
+	}
+	for _, r := range symbol {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
+}
+func encodeRegisteredSubmissions(s ForgeShare) string {
+	present := false
+	for _, v := range s.Registered {
+		present = present || v.Result.Attempted
+	}
+	if !present {
+		return ""
+	}
+	raw, _ := json.Marshal(struct {
+		Outcomes    [5]ForgeRegisteredSubmission `json:"outcomes"`
+		Login       string                       `json:"login"`
+		Worker      string                       `json:"worker"`
+		TimestampMS int64                        `json:"timestampMs"`
+	}{s.Registered, s.Login, s.Worker, s.TimestampMS})
+	return string(raw)
+}
+func (s *ForgeShare) SetRegistered(chain string, id uint32, result ForgeSubmission) error {
+	for i, v := range s.Registered {
+		if v.Chain == chain || v.Chain == "" {
+			s.Registered[i] = ForgeRegisteredSubmission{chain, id, result}
+			return nil
+		}
+	}
+	return errors.New("registered submission capacity exceeded")
 }

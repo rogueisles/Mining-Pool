@@ -160,6 +160,7 @@ func newForgeAccountingQueue(dir string, writer forgeShareWriter, options ...For
 			}
 			checked := *item.credit
 			checked.Digibyte, checked.Dogecoin = item.external.Digibyte, item.external.Dogecoin
+			checked.Registered = item.external.Registered
 			if checked.Validate() != nil {
 				q.close()
 				return nil, fmt.Errorf("invalid recorded observation")
@@ -225,6 +226,15 @@ func (q *forgeAccountingQueue) persist(item *forgeQueuedShare) (result error) {
 }
 
 func (q *forgeAccountingQueue) enqueue(receipt storage.ForgeShare) (bool, error) {
+	return q.enqueueReceipt(receipt, true)
+}
+
+// Admission acknowledgment is separate from ordered accounting. Both modes
+// validate and fsync the receipt before acknowledging ownership of the share.
+func (q *forgeAccountingQueue) enqueueDurable(receipt storage.ForgeShare) (bool, error) {
+	return q.enqueueReceipt(receipt, false)
+}
+func (q *forgeAccountingQueue) enqueueReceipt(receipt storage.ForgeShare, flush bool) (bool, error) {
 	if err := receipt.Validate(); err != nil {
 		return false, err
 	}
@@ -240,7 +250,11 @@ func (q *forgeAccountingQueue) enqueue(receipt storage.ForgeShare) (bool, error)
 	}
 	// A block-bearing receipt can come from a compatibility router. It receives
 	// the same priority as an intent; an ordinary share cannot consume overflow.
-	priority := receipt.Digibyte.Attempted || receipt.Dogecoin.Attempted || receipt.Pepecoin.Attempted || receipt.Dingocoin.Attempted || receipt.Bellscoin.Attempted || receipt.ProofHash != "" || receipt.OGGError != ""
+	registeredPriority := false
+	for _, extra := range receipt.Registered {
+		registeredPriority = registeredPriority || extra.Result.Attempted
+	}
+	priority := registeredPriority || receipt.Digibyte.Attempted || receipt.Dogecoin.Attempted || receipt.Pepecoin.Attempted || receipt.Dingocoin.Attempted || receipt.Bellscoin.Attempted || receipt.Soqucoin.Attempted || receipt.ProofHash != "" || receipt.OGGError != ""
 	if q.pausedLocked(time.Now()) || q.pendingBytes+int64(len(blob)) > q.limits.MaxPendingBytes {
 		q.paused = true
 		if !priority {
@@ -257,6 +271,9 @@ func (q *forgeAccountingQueue) enqueue(receipt storage.ForgeShare) (bool, error)
 	q.mu.Unlock()
 	if err != nil {
 		return false, fmt.Errorf("FORGE receipt not durable (retained in memory): %w", err)
+	}
+	if !flush {
+		return false, nil
 	}
 	return q.flushFor(receipt.ID)
 }
@@ -281,10 +298,21 @@ func (q *forgeAccountingQueue) flush() error {
 
 // External-only uncertainty must not hold native share accounting hostage.
 // OGG uncertainty and active submission remain ordering barriers.
-func (q *forgeAccountingQueue) flushFor(wantID string) (bool, error) {
+func (q *forgeAccountingQueue) flushFor(wantID string) (duplicate bool, resultErr error) {
 	q.flushMu.Lock()
 	defer q.flushMu.Unlock()
-	duplicate := false
+	removed := 0
+	// Admission is still fsynced before acknowledgment. Once Redis has
+	// atomically credited a receipt, a resurrected deletion is safe to replay
+	// through its persistent dedup ID. Sync cleanup in bounded batches and
+	// on every return instead of stalling all admissions on each deletion.
+	defer func() {
+		if removed > 0 {
+			if err := q.syncDir(); err != nil {
+				duplicate, resultErr = false, err
+			}
+		}
+	}()
 	for index := 0; ; {
 		q.mu.Lock()
 		if index >= len(q.pending) {
@@ -308,7 +336,12 @@ func (q *forgeAccountingQueue) flushFor(wantID string) (bool, error) {
 				return duplicate, err
 			}
 			item.credit = &snapshot
-			q.dirtyLocked(item)
+			// A resolved immutable receipt already contains this exact credit.
+			// Its durable admission journal and Redis dedup survive a crash
+			// without rewriting the same receipt before and after the credit.
+			if item.intent != nil {
+				q.dirtyLocked(item)
+			}
 		}
 		desired, snapshotErr := item.creditSnapshot()
 		if snapshotErr != nil {
@@ -362,9 +395,11 @@ func (q *forgeAccountingQueue) flushFor(wantID string) (bool, error) {
 		q.lastAccountingSuccessMS = time.Now().UnixNano() / int64(time.Millisecond)
 		if !wasCredited {
 			item.credited = true
-			if err := q.persist(item); err != nil {
-				q.mu.Unlock()
-				return false, err
+			if item.intent != nil {
+				if err := q.persist(item); err != nil {
+					q.mu.Unlock()
+					return false, err
+				}
 			}
 		}
 		if wasCredited {
@@ -394,9 +429,13 @@ func (q *forgeAccountingQueue) flushFor(wantID string) (bool, error) {
 			q.mu.Unlock()
 			return false, err
 		}
-		if err := q.syncDir(); err != nil {
-			q.mu.Unlock()
-			return false, err
+		removed++
+		if removed >= 64 {
+			if err := q.syncDir(); err != nil {
+				q.mu.Unlock()
+				return false, err
+			}
+			removed = 0
 		}
 		q.pendingBytes -= item.bytes
 		delete(q.byID, item.receipt.ID)

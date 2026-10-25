@@ -14,14 +14,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
 
 type multiEndpoint struct {
-	Symbol       string `json:"symbol"`
-	ChainID      uint32 `json:"chainId"`
-	PayoutScript string `json:"payoutScript"`
+	Symbol        string `json:"symbol"`
+	ChainID       uint32 `json:"chainId"`
+	PayoutAddress string `json:"payoutAddress,omitempty"`
+	PayoutScript  string `json:"payoutScript"`
 	endpoint
 }
 type multiView struct {
@@ -73,16 +75,27 @@ func (s *multiService) admit() bool {
 	}
 }
 
-var multiBits = map[string]uint8{"DGB": 1, "DOGE": 2, "PEP": 4, "DINGO": 8, "BELLS": 16}
-var multiIDs = map[string]uint32{"DGB": 0, "DOGE": 98, "PEP": 63, "DINGO": 50, "BELLS": 16}
-var multiGenesis = map[string]string{"DGB": "7497ea1b465eb39f1c8f507bc877078fe016d6fcb6dfad3a64c98dcc6e1e8496", "DOGE": "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691", "PEP": "37981c0c48b8d48965376c8a42ece9a0838daadb93ff975cb091f57f8c2a5faa", "DINGO": "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691", "BELLS": "e5be24df57c43a82d15c2f06bda961296948f8f8eb48501bed1efb929afe0698"}
+var multiBits = map[string]uint8{"DGB": 1, "DOGE": 2, "PEP": 4, "DINGO": 8, "BELLS": 16, "SOQ": forgepool.ExternalSOQ}
+var multiIDs = map[string]uint32{"DGB": 0, "DOGE": 98, "PEP": 63, "DINGO": 50, "BELLS": 16, "SOQ": forgepool.SOQAuxChainID}
+var multiGenesis = map[string]string{"DGB": "7497ea1b465eb39f1c8f507bc877078fe016d6fcb6dfad3a64c98dcc6e1e8496", "DOGE": "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691", "PEP": "37981c0c48b8d48965376c8a42ece9a0838daadb93ff975cb091f57f8c2a5faa", "DINGO": "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691", "BELLS": "e5be24df57c43a82d15c2f06bda961296948f8f8eb48501bed1efb929afe0698", "SOQ": forgepool.SOQMainnetGenesis}
 
 func validateMultiConfig(c config) error {
+	if c.ExternalChainPolicy == forgepool.ExternalChainPolicyRegistry {
+		return validateFlexibleConfig(c)
+	}
 	allowed, err := forgepool.ExternalChainPolicyMask(c.ExternalChainPolicy)
 	if err != nil {
 		return err
 	}
 	expected := 5
+	if allowed == 35 {
+		expected = 3
+		if c.OptionalSOQBlock <= 1100100 {
+			return errors.New("optional SOQ requires future RGN height")
+		}
+	} else if c.OptionalSOQBlock != 0 {
+		return errors.New("unexpected optional SOQ activation")
+	}
 	if allowed == 3 {
 		expected = 2
 	}
@@ -100,8 +113,11 @@ func validateMultiConfig(c config) error {
 		if e := ep.endpoint.validate(); e != nil {
 			return e
 		}
+		if ep.Symbol == "SOQ" && (!strings.HasPrefix(ep.PayoutAddress, "sq1p") || len(ep.PayoutAddress) > 90) {
+			return errors.New("SOQ payout address required")
+		}
 		script, e := hex.DecodeString(ep.PayoutScript)
-		if e != nil || len(script) < 4 || len(script) > 100 || script[0] == 0x6a {
+		if e != nil || (ep.Symbol == "SOQ" && !forgepool.ValidSOQScript(script)) || len(script) < 4 || len(script) > 100 || script[0] == 0x6a {
 			return errors.New("invalid multi-chain treasury script")
 		}
 	}
@@ -110,14 +126,20 @@ func validateMultiConfig(c config) error {
 	}
 	return nil
 }
-func (s *multiService) views(ctx context.Context) map[string]multiView {
+func (s *multiService) views(ctx context.Context, includeSOQ ...bool) map[string]multiView {
 	out := map[string]multiView{}
 	results := make(chan multiView, len(s.cfg.Multi))
+	count := 0
 	for _, ep := range s.cfg.Multi {
+		if ep.Symbol == "SOQ" && (len(includeSOQ) == 0 || !includeSOQ[0]) {
+			continue
+		}
+		count++
 		go func(ep multiEndpoint) {
 			v := multiView{ep: ep}
 			v.client, v.err = rpc.NewValidationRPCClient(ctx, ep.Symbol, ep.URL, "4s", ep.Username, ep.Password)
-			if v.err == nil {
+			fastDGB := ep.Symbol == "DGB" && s.cfg.FastDigibyteHealth
+			if v.err == nil && !fastDGB {
 				v.err = v.client.CheckAuxiliaryMainnet(ep.Genesis)
 			}
 			if v.err == nil && ep.Symbol == "DOGE" {
@@ -126,11 +148,18 @@ func (s *multiService) views(ctx context.Context) map[string]multiView {
 			if v.err == nil && ep.Symbol == "DINGO" {
 				v.err = v.client.CheckDingocoinIdentity()
 			}
+			if v.err == nil && ep.Symbol == "SOQ" {
+				v.err = v.client.ValidateSOQPayout(ep.PayoutAddress, mustDecodeScript(ep.PayoutScript))
+			}
 			if v.err == nil {
 				if ep.Symbol == "DGB" {
-					v.reply, v.err = v.client.GetDigibyteBlockTemplate()
+					if fastDGB {
+						v.reply, v.err = v.client.GetHealthyDigibyteMiningTemplate()
+					} else {
+						v.reply, v.err = v.client.GetDigibyteBlockTemplate()
+					}
 				} else {
-					v.reply, v.err = v.client.GetAuxiliaryBlockTemplate(ep.Symbol == "BELLS")
+					v.reply, v.err = v.client.GetAuxiliaryBlockTemplate(ep.Symbol == "BELLS" || ep.Symbol == "SOQ")
 				}
 			}
 			if v.err == nil {
@@ -143,7 +172,7 @@ func (s *multiService) views(ctx context.Context) map[string]multiView {
 			results <- v
 		}(ep)
 	}
-	for range s.cfg.Multi {
+	for i := 0; i < count; i++ {
 		v := <-results
 		out[v.ep.Symbol] = v
 	}
@@ -158,7 +187,13 @@ func (s *multiService) validateAndSign(ctx context.Context, req forgepool.MultiS
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	views := s.views(ctx)
+	if req.Template.Version == 5 {
+		return s.validateAndSignFlexible(ctx, req)
+	}
+	if req.Registry != nil {
+		return nil, errors.New("legacy request carries registry state")
+	}
+	views := s.views(ctx, req.Template.Mask&forgepool.ExternalSOQ != 0)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -166,7 +201,7 @@ func (s *multiService) validateAndSign(ctx context.Context, req forgepool.MultiS
 	for symbol, v := range views {
 		h := s.health[symbol]
 		h.observe(v.err == nil)
-		if !h.excluded {
+		if symbol != "SOQ" && !h.excluded {
 			required |= multiBits[symbol]
 		}
 	}
@@ -179,6 +214,39 @@ func (s *multiService) validateAndSign(ctx context.Context, req forgepool.MultiS
 	allowed, err := forgepool.ExternalChainPolicyMask(s.cfg.ExternalChainPolicy)
 	if err != nil || t.Mask & ^allowed != 0 {
 		return nil, errors.New("proposal contains a chain excluded by the configured policy")
+	}
+	if t.Mask&forgepool.ExternalSOQ != 0 {
+		if t.Version != 4 {
+			return nil, errors.New("optional SOQ requires V4 certificate work")
+		}
+		if err := forgepool.ValidateOptionalSOQHeader(req.RGNHeader, req.WorkHash, t.ValidFrom, s.cfg.OptionalSOQBlock); err != nil {
+			return nil, err
+		}
+		if v, ok := views["SOQ"]; !ok || v.err != nil {
+			return nil, errors.New("optional SOQ backend unavailable")
+		}
+		required |= forgepool.ExternalSOQ
+	}
+	// Upgraded pools may select any nonempty healthy subset of the three
+	// supported sources. This policy is gated by the actual RGN work header;
+	// requests without that binding retain the historical health policy.
+	if s.cfg.ExternalChainPolicy == forgepool.ExternalChainPolicyDGBDOGESQ && len(req.RGNHeader) != 0 {
+		if t.Version != 4 {
+			return nil, errors.New("upgraded RGN work requires V4 certificate")
+		}
+		if err := forgepool.ValidateOptionalSOQHeader(req.RGNHeader, req.WorkHash, t.ValidFrom, s.cfg.OptionalSOQBlock); err != nil {
+			return nil, err
+		}
+		for symbol, bit := range multiBits {
+			if t.Mask&bit == 0 {
+				continue
+			}
+			v, ok := views[symbol]
+			if !ok || v.err != nil || (symbol != "SOQ" && s.health[symbol].excluded) {
+				return nil, errors.New("selected native source is unavailable")
+			}
+		}
+		required = t.Mask
 	}
 	now := uint64(time.Now().Unix())
 	if !forgepool.RevenueAnchorPresent(required) || !forgepool.RevenueAnchorPresent(t.Mask) || t.Mask != required || t.ValidFrom > now || now-t.ValidFrom > 300 || t.Expires <= now || req.WorkHash == (common.Hash{}) {
@@ -346,7 +414,7 @@ func (s *multiService) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	now := uint64(time.Now().Unix())
 	if ctx.Err() != nil || forgepool.MultiTemplateValid(req.Template) != nil || req.WorkHash == (common.Hash{}) ||
 		req.Template.ValidFrom > now || now-req.Template.ValidFrom > 300 || req.Template.Expires <= now ||
-		len(req.Aux) > 4 || (req.Template.Mask&1 != 0 && req.DGB == nil) ||
+		len(req.Aux) > 6 || (req.Template.Version != 5 && len(req.Aux) > 4) || (req.Template.Mask&1 != 0 && req.DGB == nil) ||
 		(req.DGB != nil && len(req.DGB.Transactions) > 20000) {
 		http.Error(w, "invalid multi-chain request", http.StatusBadRequest)
 		return
@@ -377,7 +445,7 @@ func runMulti(c config, key *ecdsa.PrivateKey, check bool) error {
 		healthy := 0
 		ctx, cancel := context.WithTimeout(context.Background(), multiRequestTimeout)
 		defer cancel()
-		for symbol, v := range s.views(ctx) {
+		for symbol, v := range s.views(ctx, true) {
 			if v.err == nil {
 				healthy++
 				fmt.Println(symbol + " ready")

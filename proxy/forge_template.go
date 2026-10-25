@@ -78,12 +78,23 @@ func (t *forgeSignedTemplate) validate(job *forgeJob, authorized []common.Addres
 		if e != nil || !forgepool.MultiTemplatesEqual(rebuilt, *t.Multi) {
 			return errors.New("multi-chain parent body or treasury mismatch")
 		}
-		if t.Multi.Version == 4 && job.Signed != nil {
+		if t.Multi.Version >= 4 && job.Signed != nil {
 			if e := job.Digibyte.CheckCertificate(*t.Multi, t.Signatures); e != nil {
 				return e
 			}
 		}
-		return forgepool.ValidateMultiSignatures(*t.Multi, common.HexToHash(t.WorkHash), t.Signatures, authorized, quorum, stamp)
+		work := common.HexToHash(t.WorkHash)
+		if t.Multi.Version == 5 {
+			if job.Registry == nil || job.RegistryContext == nil {
+				return errors.New("missing registry validation context")
+			}
+			var e error
+			work, e = forgepool.FlexibleSigningWork(work, job.Registry)
+			if e != nil {
+				return e
+			}
+		}
+		return forgepool.ValidateMultiSignatures(*t.Multi, work, t.Signatures, authorized, quorum, stamp)
 	}
 	if job.ProtocolV3 {
 		return errors.New("missing multi-chain authorization")

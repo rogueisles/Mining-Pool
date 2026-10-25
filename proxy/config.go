@@ -69,23 +69,30 @@ type Upstream struct {
 // ForgeConfig enables the Scrypt merged-mining path. When disabled the pool
 // retains its legacy ProgPoW behavior unchanged.
 type ForgeConfig struct {
-	ExternalChainPolicy  string                `json:"externalChainPolicy,omitempty"`
-	VariableDifficulty   ForgeVarDiffConfig    `json:"variableDifficulty"`
-	MultiChain           bool                  `json:"multiChain"`
-	AdditionalAux        []ForgeAuxEndpoint    `json:"additionalAux"`
-	Enabled              bool                  `json:"enabled"`
-	RetainExternalWork   bool                  `json:"retainExternalWork"`
-	AccountingJournalDir string                `json:"accountingJournalDir"`
-	Accounting           ForgeAccountingLimits `json:"accounting"`
-	Digibyte             ForgeChainEndpoint    `json:"digibyte"`
-	Dogecoin             ForgeChainEndpoint    `json:"dogecoin"`
-	ExtraNonce1Size      int                   `json:"extranonce1Size"`
-	ExtraNonce2Size      int                   `json:"extranonce2Size"`
-	JobBacklog           int                   `json:"jobBacklog"`
-	MaxNTimeDriftSec     int64                 `json:"maxNTimeDriftSec"`
-	TemplateValiditySec  int64                 `json:"templateValiditySec"`
-	TemplateQuorum       uint64                `json:"templateQuorum"`
-	TemplateSigners      []ForgeSigner         `json:"templateSigners"`
+	RegistryBlock                uint64                     `json:"registryBlock,omitempty"`
+	RegistryOperationFile        string                     `json:"registryOperationFile,omitempty"`
+	TreasuryDestinations         []ForgeTreasuryDestination `json:"treasuryDestinations,omitempty"`
+	TreasuryScripts              []string                   `json:"treasuryScripts,omitempty"`
+	OptionalSOQBlock             uint64                     `json:"optionalSoqBlock,omitempty"`
+	FastDigibyteHealth           bool                       `json:"fastDigibyteHealth"`
+	DurableShareAcknowledgements bool                       `json:"durableShareAcknowledgements"`
+	ExternalChainPolicy          string                     `json:"externalChainPolicy,omitempty"`
+	VariableDifficulty           ForgeVarDiffConfig         `json:"variableDifficulty"`
+	MultiChain                   bool                       `json:"multiChain"`
+	AdditionalAux                []ForgeAuxEndpoint         `json:"additionalAux"`
+	Enabled                      bool                       `json:"enabled"`
+	RetainExternalWork           bool                       `json:"retainExternalWork"`
+	AccountingJournalDir         string                     `json:"accountingJournalDir"`
+	Accounting                   ForgeAccountingLimits      `json:"accounting"`
+	Digibyte                     ForgeChainEndpoint         `json:"digibyte"`
+	Dogecoin                     ForgeChainEndpoint         `json:"dogecoin"`
+	ExtraNonce1Size              int                        `json:"extranonce1Size"`
+	ExtraNonce2Size              int                        `json:"extranonce2Size"`
+	JobBacklog                   int                        `json:"jobBacklog"`
+	MaxNTimeDriftSec             int64                      `json:"maxNTimeDriftSec"`
+	TemplateValiditySec          int64                      `json:"templateValiditySec"`
+	TemplateQuorum               uint64                     `json:"templateQuorum"`
+	TemplateSigners              []ForgeSigner              `json:"templateSigners"`
 }
 
 // ForgeSigner is an external quorum signer.  Only its public Ethereum-style
@@ -107,4 +114,9 @@ type ForgeChainEndpoint struct {
 	Username     string `json:"username"`
 	Password     string `json:"password"`
 	PayoutScript string `json:"payoutScript"`
+}
+
+type ForgeTreasuryDestination struct {
+	Script  string `json:"script"`
+	Address string `json:"address,omitempty"`
 }

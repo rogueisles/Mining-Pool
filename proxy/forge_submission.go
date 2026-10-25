@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"time"
 
@@ -25,6 +26,7 @@ type forgeJournalRecord struct {
 // Only public submission material and an endpoint fingerprint are persisted.
 // Never serialize RPCClient: it contains credentials. Payloads are immutable.
 type forgePendingBlock struct {
+	ChainID   uint32
 	Chain     string
 	Endpoint  string
 	Payload   string
@@ -53,7 +55,7 @@ func forgePayloadDigest(b []byte) string {
 }
 
 func (in *forgeSubmissionIntent) validate(receipt storage.ForgeShare) error {
-	if len(in.Blocks) < 1 || len(in.Blocks) > 6 || receipt.ProofHash != "" {
+	if len(in.Blocks) < 1 || len(in.Blocks) > 7 || receipt.ProofHash != "" {
 		return errors.New("invalid FORGE intent")
 	}
 	seen := make(map[string]bool)
@@ -82,6 +84,16 @@ func (in *forgeSubmissionIntent) validate(receipt storage.ForgeShare) error {
 		if err != nil || len(data) < 80 || len(data) > 16*1024*1024 || forgePayloadDigest(data) != b.Digest {
 			return errors.New("corrupt intent payload")
 		}
+		if storage.ValidRegisteredSymbol(b.Chain) {
+			if b.ChainID == 0 || b.ChainID > 65535 || b.ChainID == 98 || b.ChainID == 21329 || b.ChainID == 20295 {
+				return errors.New("invalid registered intent identity")
+			}
+			first := sha256.Sum256(data[:80])
+			hash := sha256.Sum256(first[:])
+			if b.BlockHash != "0x"+forgepool.DisplayHash(forgepool.Hash(hash)) {
+				return errors.New("registered intent hash mismatch")
+			}
+		}
 		switch b.Chain {
 		case "DGB":
 			if forgePayloadDigest(data[:80]) != receipt.ID {
@@ -92,7 +104,7 @@ func (in *forgeSubmissionIntent) validate(receipt storage.ForgeShare) error {
 			if b.BlockHash != "0x"+forgepool.DisplayHash(forgepool.Hash(hash)) {
 				return errors.New("DGB intent hash mismatch")
 			}
-		case "DOGE", "PEP", "DINGO", "BELLS":
+		case "DOGE", "PEP", "DINGO", "BELLS", "SOQ":
 			first := sha256.Sum256(data[:80])
 			hash := sha256.Sum256(first[:])
 			if b.BlockHash != "0x"+forgepool.DisplayHash(forgepool.Hash(hash)) {
@@ -113,7 +125,16 @@ func (in *forgeSubmissionIntent) validate(receipt storage.ForgeShare) error {
 
 func (r *rpcForgeSubmitter) prepareIntent(job *forgeJob, sol *forgeSolution, hits forgeHits) *forgeSubmissionIntent {
 	in := &forgeSubmissionIntent{}
-	for _, chain := range []string{"DGB", "DOGE", "PEP", "DINGO", "BELLS", "OGG"} {
+	chains := []string{"DGB", "DOGE", "PEP", "DINGO", "BELLS", "SOQ", "OGG"}
+	if job != nil && job.Registry != nil {
+		chains = []string{"OGG", "DGB", "DOGE", "PEP", "DINGO", "BELLS", "SOQ"}
+	}
+	for _, v := range hits.Registered {
+		if v.Hit {
+			chains = append(chains, v.Symbol)
+		}
+	}
+	for _, chain := range chains {
 		if (chain == "DGB" && !hits.Digibyte) || (chain == "DOGE" && !hits.Dogecoin) || (chain == "OGG" && !hits.OGG) || (knownExtraChain(chain) && !hits.extraFor(chain)) {
 			continue
 		}
@@ -146,7 +167,7 @@ func (r *rpcForgeSubmitter) prepareIntent(job *forgeJob, sol *forgeSolution, hit
 			if err == nil {
 				data, err = job.Digibyte.DogeAuxPowBlock(sol.ExtraNonce1, sol.ExtraNonce2, sol.NTime, sol.Nonce)
 			}
-		case "PEP", "DINGO", "BELLS":
+		case "PEP", "DINGO", "BELLS", "SOQ":
 			id, ok := job.AuxSymbols[chain]
 			if !ok || job.Digibyte.AdditionalAux[id] == nil {
 				err = errors.New("missing additional auxiliary candidate")
@@ -162,6 +183,17 @@ func (r *rpcForgeSubmitter) prepareIntent(job *forgeJob, sol *forgeSolution, hit
 				b.NotBefore = int64(job.Signed.Template.ValidFrom)
 				b.Expires = int64(job.Signed.Template.Expires)
 				data, err = forgeEncodeJobProof(job, sol)
+			}
+		}
+		if storage.ValidRegisteredSymbol(chain) {
+			id, ok := job.AuxSymbols[chain]
+			if !ok || job.Digibyte.AdditionalAux[id] == nil {
+				err = errors.New("missing registered auxiliary candidate")
+			} else {
+				b.ChainID = id
+				b.Endpoint = forgeEndpointID(r.auxClients[chain])
+				b.BlockHash = "0x" + job.Digibyte.AdditionalAux[id].DisplayHash
+				data, err = job.Digibyte.AuxBlockFor(id, sol.ExtraNonce1, sol.ExtraNonce2, sol.NTime, sol.Nonce)
 			}
 		}
 		if err != nil || b.Endpoint == "" {
@@ -181,10 +213,13 @@ func (r *rpcForgeSubmitter) intentClient(b forgePendingBlock) *rpc.RPCClient {
 		clients = []*rpc.RPCClient{r.dgb}
 	case "DOGE":
 		clients = []*rpc.RPCClient{r.doge}
-	case "PEP", "DINGO", "BELLS":
+	case "PEP", "DINGO", "BELLS", "SOQ":
 		clients = []*rpc.RPCClient{r.auxClients[b.Chain]}
 	case "OGG":
 		clients = r.issuers
+	}
+	if storage.ValidRegisteredSymbol(b.Chain) {
+		clients = []*rpc.RPCClient{r.auxClients[b.Chain]}
 	}
 	for _, c := range clients {
 		if c != nil && forgeEndpointID(c) == b.Endpoint {
@@ -271,6 +306,20 @@ func (q *forgeAccountingQueue) runIntent(item *forgeQueuedShare, r *rpcForgeSubm
 			continue
 		}
 		if forgeNow(r.clock).Unix() >= b.Expires {
+			if wasSent && b.Chain == "OGG" {
+				depth := r.maturityDepth
+				if depth < 32 {
+					depth = 32
+				}
+				excluded, lookupErr := client.ForgeProofExcludedAtMaturity(item.receipt.Height, b.Payload, depth)
+				if lookupErr == nil && excluded {
+					b.State, b.Error = "rejected", "not canonical at pool maturity"
+					if err := q.saveIntent(item, in); err != nil {
+						diskErr = err
+					}
+					continue
+				}
+			}
 			b.Error = "submission window expired; acceptance unresolved"
 			if !wasSent {
 				b.State, b.Error = "rejected", "expired before first submission"
@@ -304,10 +353,14 @@ func (q *forgeAccountingQueue) runIntent(item *forgeQueuedShare, r *rpcForgeSubm
 		var accepted, rejected bool
 		var err error
 		attempted = true
+		submittedAt := time.Now()
 		if b.Chain == "OGG" {
 			accepted, rejected, err = client.SubmitForgeOGG(item.receipt.WorkHash, b.Payload)
 		} else {
 			accepted, rejected, err = client.SubmitForgeBlock(b.Payload)
+		}
+		if b.Chain != "OGG" {
+			log.Printf("FORGE native submission chain=%s block=%s rgn_height=%d queued_ms=%d rpc_ms=%d accepted=%t rejected=%t", b.Chain, b.BlockHash, item.receipt.Height, submittedAt.UnixNano()/int64(time.Millisecond)-item.receipt.TimestampMS, time.Since(submittedAt).Milliseconds(), accepted, rejected)
 		}
 		if accepted {
 			b.State, b.Error = "accepted", ""
@@ -353,6 +406,14 @@ func (q *forgeAccountingQueue) finishIntent(item *forgeQueuedShare, in forgeSubm
 				item.receipt.Dingocoin = sub
 			case "BELLS":
 				item.receipt.Bellscoin = sub
+			case "SOQ":
+				item.receipt.Soqucoin = sub
+			default:
+				if storage.ValidRegisteredSymbol(b.Chain) {
+					if err := item.receipt.SetRegistered(b.Chain, b.ChainID, sub); err != nil {
+						return err
+					}
+				}
 			case "OGG":
 				if b.State == "accepted" {
 					data, _ := hex.DecodeString(b.Payload)
@@ -398,8 +459,12 @@ func (q *forgeAccountingQueue) recoverSubmissions(r *rpcForgeSubmitter) error {
 
 func (s *ProxyServer) processForgeIntent(r *rpcForgeSubmitter, job *forgeJob, sol *forgeSolution, hits forgeHits, receipt storage.ForgeShare) (bool, bool, forgeHits, error) {
 	in := r.prepareIntent(job, sol, hits)
-	if len(in.Blocks) == 0 { // Ordinary shares still wait behind unresolved rounds.
-		exists, err := s.forge.account.enqueue(receipt)
+	if len(in.Blocks) == 0 { // Credit stays ordered even when a durable share is acknowledged promptly.
+		enqueue := s.forge.account.enqueue
+		if s.forge.durableShareAcknowledgements {
+			enqueue = s.forge.account.enqueueDurable
+		}
+		exists, err := enqueue(receipt)
 		return err == nil && !exists, exists, hits, err
 	}
 	item, persistErr := s.forge.account.beginIntent(receipt, in)
@@ -408,6 +473,14 @@ func (s *ProxyServer) processForgeIntent(r *rpcForgeSubmitter, job *forgeJob, so
 	}
 	if err := s.forge.account.runIntent(item, r); err != nil {
 		persistErr = err
+	}
+	if s.forge.durableShareAcknowledgements && persistErr == nil {
+		s.forge.account.mu.Lock()
+		durable := item.durable
+		s.forge.account.mu.Unlock()
+		if durable {
+			return true, false, hits, nil
+		}
 	}
 	exists, err := s.forge.account.flushFor(receipt.ID)
 	if persistErr != nil {

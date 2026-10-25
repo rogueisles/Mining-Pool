@@ -33,7 +33,7 @@ func (s independentTestTemplates) Templates(context.Context) (*rpc.BlockTemplate
 	return s.dgb, s.doge, nil
 }
 func signerGBT(t forgepool.ParentTemplate) *rpc.BlockTemplateReply {
-	return &rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n:=1; return &n }(),Version: t.Version, PreviousBlockHash: forgepool.DisplayHash(t.Previous), Bits: fmt.Sprintf("%08x", t.Bits), Height: t.Height, CurTime: int64(t.CurTime), MinTime: int64(t.CurTime) - 1, CoinbaseValue: t.CoinbaseValue}
+	return &rpc.BlockTemplateReply{PowAlgo: "scrypt", PowAlgoID: func() *int { n := 1; return &n }(), Version: t.Version, PreviousBlockHash: forgepool.DisplayHash(t.Previous), Bits: fmt.Sprintf("%08x", t.Bits), Height: t.Height, CurTime: int64(t.CurTime), MinTime: int64(t.CurTime) - 1, CoinbaseValue: t.CoinbaseValue}
 }
 
 func TestForgeIndependentSignerQuorumHTTPAndProof(t *testing.T) {

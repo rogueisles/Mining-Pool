@@ -1,0 +1,28 @@
+{
+  "version": "4.1.0",
+  "protocol": "FORGE V5",
+  "activationHeight": 1121800,
+  "profileSHA256": "87c66819311b112adce09855f9c2c38490fb32a193ea35ca7c466892319aefd8",
+  "initialAdministratorQuorum": "3-of-4",
+  "privateKeysIncluded": false,
+  "qualification": "Private staging mining plus native mainnet proposal checks; no claimed mainnet SOQ reward",
+  "publicSourceBases": {
+    "Rogue-Network": {
+      "commit": "18367e0aea25899af7fe8d608f0a19fa420740a9",
+      "date": "2026-10-20T16:39:04Z"
+    },
+    "Rogue-Node": {
+      "commit": "ffd88dbc13f8d1202e3bf9bee97c2e56732804c4",
+      "date": "2026-10-22T18:20:27Z"
+    },
+    "Mining-Pool": {
+      "commit": "f3c2cc4fe7b1bc8d3450b8363d5fe24d02e6906d",
+      "date": "2026-10-22T19:28:39Z"
+    },
+    "checkedUtc": "2026-10-25T09:30:21.8247017Z",
+    "Rogue-Docker-Node": {
+      "commit": "1bef1f08d796a81169f7e4feec07f6b8402aa0bd",
+      "date": "2026-10-22T18:14:34Z"
+    }
+  }
+}

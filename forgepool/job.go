@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 const dogeAuxPowFlag uint32 = 1 << 8
@@ -88,6 +90,7 @@ func BuildDogeCandidate(tpl ParentTemplate, payoutScript []byte, jobNonce uint32
 
 // DigibyteJob is the merged parent work distributed over Scrypt Stratum.
 type DigibyteJob struct {
+	CertificateWork common.Hash
 	ProtocolVersion uint8
 	Template        ParentTemplate
 	OGGLeaf         Hash

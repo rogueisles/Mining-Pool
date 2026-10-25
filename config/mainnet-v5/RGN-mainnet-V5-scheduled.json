@@ -1,0 +1,60 @@
+{
+  "alloc": {
+    "0x94931DA88ea88bf23f44502E012f71DeA86E6e9E": {
+      "balance": "700000000000000000000000000",
+      "comment": "Premine wallet — 700,000,000 OGG"
+    }
+  },
+  "coinbase": "0x0000000000000000000000000000000000000000",
+  "config": {
+    "byzantiumBlock": 0,
+    "chainId": 70088,
+    "constantinopleBlock": 0,
+    "eip150Block": 0,
+    "eip150Hash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+    "eip155Block": 0,
+    "eip158Block": 0,
+    "forge": {
+      "allowAuxTree": true,
+      "auxChainId": 20295,
+      "bellscoinPayoutScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "dingocoinPayoutScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "dogeAuxChainId": 98,
+      "dogePayoutScriptHash": "0x68907fbe8d80920192e8a8fc611dd4f10fcf0ac29ea09a6856ed59a46da4afb7",
+      "initialDifficulty": 21,
+      "ltcPayoutScriptHash": "0x61a5c2ea83616bd160c97438eea42824ae63f7d3359e893d8b0d777d049b059d",
+      "minimumDifficulty": 1,
+      "pepecoinPayoutScriptHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+      "preForgeGrossIssued": 1443341200708488883357593982,
+      "registryBlock": 1121800,
+      "registryBootstrap": "0xf901b2f85ef854940b067cd7c5bbedba18a6b2d3f2af0db140d4efe5944829a5cd31ff288b116653f29c341746f329dc73947c3db6abadb5be02604beb465160e54e485354db9497c2c2aa585d871b21598bccfa56034cc0aa6e4903018080c0808080f9014ff86d0180a07497ea1b465eb39f1c8f507bc877078fe016d6fcb6dfad3a64c98dcc6e1e8496010183111e0880a061a5c2ea83616bd160c97438eea42824ae63f7d3359e893d8b0d777d049b059da0000000000000000000000000000000000000000000000000000000000000000080f86d0262a01a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691010183111e0880a068907fbe8d80920192e8a8fc611dd4f10fcf0ac29ea09a6856ed59a46da4afb7a0000000000000000000000000000000000000000000000000000000000000000080f86f03825351a00d828600816cbd7c23789660b53f90cb6ec7ff85540698e13845eb2d2f0486a8020183111e0880a0e75c0bf78649f96f356b229dff25458a86d9b4977d13c09451dd195839d47427a0000000000000000000000000000000000000000000000000000000000000000080",
+      "registryMinDelay": 720,
+      "registryMinOperationInterval": 64,
+      "registryTargetBlockTimeMillis": 12500,
+      "requireDgbOrDogeWork": true,
+      "requireMultiExternalWork": true,
+      "retargetV2": true,
+      "rewardSchedule": "rgn-mainnet-v3",
+      "targetBlockTime": 12,
+      "templateMaxValidity": 300,
+      "templateQuorum": 2,
+      "templateSigners": [
+        "0xb00127ba6f96b6bbb32c96a8f74de40b1de1de30",
+        "0xd8dbe2efb89f2873986bce6d826aa6f417c5cb03",
+        "0x27f0e3e0060bb18fe4edc0059f67ae568aefdce3",
+        "0x282390aad1587182d2ecd852f923267d58c4fc14"
+      ]
+    },
+    "forgeBlock": 1100100,
+    "homesteadBlock": 0,
+    "progpow": {
+      "period": 10
+    }
+  },
+  "difficulty": "0x5000000",
+  "extraData": "0x",
+  "gasLimit": "0x1000000",
+  "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "nonce": "0x0000000000000042",
+  "timestamp": "0x0"
+}

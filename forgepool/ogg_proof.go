@@ -73,6 +73,7 @@ type OGGAuxPowProofV2 struct {
 }
 
 type OGGAuxPowProof struct {
+	Flexible           *FlexibleProof
 	Multi              *MultiProof
 	MinerExtra         []byte
 	ParentHeader       []byte
@@ -193,6 +194,9 @@ func TemplateExternalMask(t ExternalTemplate) (uint8, error) {
 }
 
 func EncodeOGGProof(p *OGGAuxPowProof) ([]byte, error) {
+	if p != nil && p.Flexible != nil {
+		return EncodeFlexibleProof(p.Flexible)
+	}
 	if p != nil && p.Multi != nil {
 		return EncodeMultiProof(p.Multi)
 	}
@@ -225,6 +229,14 @@ func DecodeOGGProof(blob []byte) (*OGGAuxPowProof, error) {
 	}
 	if len(blob) > MaxOGGProofSize {
 		return nil, errors.New("OGGF proof envelope too large")
+	}
+	if blob[4] == 5 {
+		p, err := DecodeFlexibleProof(blob)
+		if err != nil {
+			return nil, err
+		}
+		m := p.Multi
+		return &OGGAuxPowProof{Flexible: p, Multi: &m, MinerExtra: m.MinerExtra, ParentHeader: m.ParentHeader, ParentCoinbase: m.ParentCoinbase, ParentMerkleBranch: m.ParentMerkleBranch, Template: ExternalTemplate{ValidFrom: m.Template.ValidFrom, Expires: m.Template.Expires}}, nil
 	}
 	if blob[4] == 3 || blob[4] == 4 {
 		var m MultiProof

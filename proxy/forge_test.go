@@ -439,7 +439,7 @@ func TestForgeIndependentSingleChainTargetHits(t *testing.T) {
 				hdr, _ := job.Digibyte.Header(cs.extraNonce1, []byte{5, 6, 7, 8}, job.Digibyte.Template.CurTime, n)
 				h, _ := forgepool.ScryptHash(hdr)
 				v := forgepool.HashValue(h)
-				have := forgeHits{Digibyte:v.Cmp(lt) <= 0,Dogecoin: v.Cmp(dt) <= 0,OGG: v.Cmp(ot) <= 0}
+				have := forgeHits{Digibyte: v.Cmp(lt) <= 0, Dogecoin: v.Cmp(dt) <= 0, OGG: v.Cmp(ot) <= 0}
 				if have == tc.want {
 					nonce, found = n, true
 					break

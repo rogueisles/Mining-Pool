@@ -5,16 +5,19 @@ import (
 	"fmt"
 	"github.com/HawyUkr/open-progpow-pool/forgepool"
 	"github.com/HawyUkr/open-progpow-pool/rpc"
+	"github.com/HawyUkr/open-progpow-pool/storage"
 	"net"
 	"net/url"
 	"strconv"
+	"strings"
 )
 
 type ForgeAuxEndpoint struct {
-	Symbol   string             `json:"symbol"`
-	ChainID  uint32             `json:"chainId"`
-	Genesis  string             `json:"genesis"`
-	Endpoint ForgeChainEndpoint `json:"endpoint"`
+	PayoutAddress string             `json:"payoutAddress,omitempty"`
+	Symbol        string             `json:"symbol"`
+	ChainID       uint32             `json:"chainId"`
+	Genesis       string             `json:"genesis"`
+	Endpoint      ForgeChainEndpoint `json:"endpoint"`
 }
 type forgeAuxRuntime struct {
 	symbol  string
@@ -22,12 +25,20 @@ type forgeAuxRuntime struct {
 	genesis string
 	client  *rpc.RPCClient
 	script  []byte
+	address string
 }
 
 func knownExtraChain(symbol string) bool {
-	return symbol == "PEP" || symbol == "DINGO" || symbol == "BELLS"
+	return symbol == "PEP" || symbol == "DINGO" || symbol == "BELLS" || symbol == "SOQ" || storage.ValidRegisteredSymbol(symbol)
 }
-func (h forgeHits) extra() bool { return h.Pepecoin || h.Dingocoin || h.Bellscoin }
+func (h forgeHits) extra() bool {
+	for _, v := range h.Registered {
+		if v.Hit {
+			return true
+		}
+	}
+	return h.Pepecoin || h.Dingocoin || h.Bellscoin || h.Soqucoin
+}
 func (h forgeHits) extraFor(symbol string) bool {
 	switch symbol {
 	case "PEP":
@@ -36,29 +47,53 @@ func (h forgeHits) extraFor(symbol string) bool {
 		return h.Dingocoin
 	case "BELLS":
 		return h.Bellscoin
+	case "SOQ":
+		return h.Soqucoin
+	}
+	for _, v := range h.Registered {
+		if v.Symbol == symbol {
+			return v.Hit
+		}
 	}
 	return false
 }
 
-func auxiliaryClients(cfg []ForgeAuxEndpoint) ([]forgeAuxRuntime, error) {
-	if len(cfg) != 0 && len(cfg) != 3 {
+func auxiliaryClients(cfg []ForgeAuxEndpoint, flexible ...bool) ([]forgeAuxRuntime, error) {
+	registered := len(flexible) > 0 && flexible[0]
+	if registered && len(cfg) > 5 {
+		return nil, errors.New("too many registered auxiliary endpoints")
+	}
+	if !registered && len(cfg) != 0 && len(cfg) != 3 && !(len(cfg) == 1 && cfg[0].Symbol == "SOQ") {
 		return nil, errors.New("D14 requires all three additional auxiliary endpoints")
 	}
 	seen := map[uint32]bool{forgepool.OGGAuxChainID: true, forgepool.DOGEAuxChainID: true}
 	symbols := map[string]bool{}
 	var out []forgeAuxRuntime
 	for _, c := range cfg {
-		if !knownExtraChain(c.Symbol) || symbols[c.Symbol] || c.ChainID == 0 || c.ChainID > 65535 || seen[c.ChainID] || len(c.Genesis) != 64 {
+		if (!registered && !knownExtraChain(c.Symbol)) || (registered && !validRegisteredSymbol(c.Symbol)) || symbols[c.Symbol] || c.ChainID == 0 || c.ChainID > 65535 || seen[c.ChainID] || len(c.Genesis) != 64 {
 			return nil, errors.New("invalid or duplicate auxiliary configuration")
 		}
-		ids := map[string]uint32{"PEP": 63, "DINGO": 50, "BELLS": 16}
-		genesis := map[string]string{"PEP": "37981c0c48b8d48965376c8a42ece9a0838daadb93ff975cb091f57f8c2a5faa", "DINGO": "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691", "BELLS": "e5be24df57c43a82d15c2f06bda961296948f8f8eb48501bed1efb929afe0698"}
-		if c.ChainID != ids[c.Symbol] || c.Genesis != genesis[c.Symbol] {
+		ids := map[string]uint32{"PEP": 63, "DINGO": 50, "BELLS": 16, "SOQ": forgepool.SOQAuxChainID}
+		genesis := map[string]string{"PEP": "37981c0c48b8d48965376c8a42ece9a0838daadb93ff975cb091f57f8c2a5faa", "DINGO": "1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691", "BELLS": "e5be24df57c43a82d15c2f06bda961296948f8f8eb48501bed1efb929afe0698", "SOQ": forgepool.SOQMainnetGenesis}
+		if registered {
+			for symbol, id := range ids {
+				if (c.Symbol == symbol) != (c.ChainID == id) {
+					return nil, errors.New("registered conventional symbol and identity differ")
+				}
+			}
+		}
+		if registered && ((c.Symbol == "SOQ") != (c.ChainID == forgepool.SOQAuxChainID)) {
+			return nil, errors.New("registered SOQ symbol and identity differ")
+		}
+		if !registered && (c.ChainID != ids[c.Symbol] || c.Genesis != genesis[c.Symbol]) {
 			return nil, errors.New("auxiliary mainnet identity not pinned")
 		}
 		script, err := parseForgeScript(c.Endpoint.PayoutScript)
 		if err != nil {
 			return nil, err
+		}
+		if c.Symbol == "SOQ" && (!forgepool.ValidSOQScript(script) || (!registered && !strings.HasPrefix(c.PayoutAddress, "sq1p")) || c.PayoutAddress == "" || len(c.PayoutAddress) > 90) {
+			return nil, errors.New("SOQ requires a native witness-v1 payout script and sq1p address")
 		}
 		ep := forgeEndpointDefaults(c.Endpoint, c.Symbol)
 		u, e := url.Parse(ep.Url)
@@ -72,7 +107,7 @@ func auxiliaryClients(cfg []ForgeAuxEndpoint) ([]forgeAuxRuntime, error) {
 		}
 		seen[c.ChainID] = true
 		symbols[c.Symbol] = true
-		out = append(out, forgeAuxRuntime{c.Symbol, c.ChainID, c.Genesis, rpc.NewRPCClient(ep.Name, ep.Url, ep.Timeout, ep.Username, ep.Password), script})
+		out = append(out, forgeAuxRuntime{c.Symbol, c.ChainID, c.Genesis, rpc.NewRPCClient(ep.Name, ep.Url, ep.Timeout, ep.Username, ep.Password), script, c.PayoutAddress})
 	}
 	return out, nil
 }
@@ -115,4 +150,16 @@ func (rt *forgeRuntime) attachAdditionalAux(job *forgeJob, seq uint32) error {
 	}
 	job.AuxSymbols = symbols
 	return nil
+}
+
+func validRegisteredSymbol(symbol string) bool {
+	if len(symbol) < 2 || len(symbol) > 12 || symbol == "DGB" || symbol == "DOGE" || symbol == "OGG" {
+		return false
+	}
+	for _, r := range symbol {
+		if (r < 'A' || r > 'Z') && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
 }

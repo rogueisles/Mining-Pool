@@ -11,20 +11,25 @@ import (
 )
 
 const certificateTag = "RGNCERT4"
+const certificateTagV5 = "RGNCERT5"
 
 func MultiCertificateDigest(t MultiTemplate, work common.Hash, signatures [][]byte) (common.Hash, error) {
-	if t.Version != 4 || work == (common.Hash{}) {
+	if (t.Version != 4 && t.Version != 5) || work == (common.Hash{}) {
 		return common.Hash{}, errors.New("invalid certificate domain")
 	}
 	if err := MultiTemplateValid(t); err != nil {
 		return common.Hash{}, err
+	}
+	domain := "RGN-FORGE-CERTIFICATE-V4"
+	if t.Version == 5 {
+		domain = "RGN-FORGE-CERTIFICATE-V5"
 	}
 	payload := struct {
 		Domain     []byte
 		Template   MultiTemplate
 		WorkHash   common.Hash
 		Signatures [][]byte
-	}{[]byte("RGN-FORGE-CERTIFICATE-V4"), t, work, signatures}
+	}{[]byte(domain), t, work, signatures}
 	blob, err := rlp.EncodeToBytes(payload)
 	if err != nil {
 		return common.Hash{}, err
@@ -33,13 +38,29 @@ func MultiCertificateDigest(t MultiTemplate, work common.Hash, signatures [][]by
 }
 
 func certificateScript(digest common.Hash) []byte {
-	script := append([]byte{0x6a, 40}, []byte(certificateTag)...)
+	return certificateScriptVersion(digest, 4)
+}
+
+func certificateScriptVersion(digest common.Hash, version uint8) []byte {
+	tag := certificateTag
+	if version == 5 {
+		tag = certificateTagV5
+	}
+	script := append([]byte{0x6a, 40}, []byte(tag)...)
 	return append(script, digest[:]...)
 }
 
 // certificatePlan changes only the uniquely tagged certificate output and
 // rebuilds both Stratum fragments from the same transaction representation.
 func certificatePlan(source *CoinbasePlan, digest common.Hash) (*CoinbasePlan, error) {
+	return certificatePlanVersion(source, digest, 4)
+}
+
+func certificatePlanVersion(source *CoinbasePlan, digest common.Hash, version uint8) (*CoinbasePlan, error) {
+	tag := certificateTag
+	if version == 5 {
+		tag = certificateTagV5
+	}
 	if source == nil {
 		return nil, errors.New("missing certificate coinbase plan")
 	}
@@ -48,7 +69,7 @@ func certificatePlan(source *CoinbasePlan, digest common.Hash) (*CoinbasePlan, e
 	index := -1
 	for i, output := range plan.Outputs {
 		script := output.Script
-		if len(script) < 10 || !bytes.Equal(script[2:10], []byte(certificateTag)) {
+		if len(script) < 10 || !bytes.Equal(script[2:10], []byte(tag)) {
 			continue
 		}
 		if index >= 0 || output.Value != 0 || len(script) != 42 || script[0] != 0x6a || script[1] != 40 {
@@ -59,7 +80,7 @@ func certificatePlan(source *CoinbasePlan, digest common.Hash) (*CoinbasePlan, e
 	if index < 0 {
 		return nil, errors.New("missing mined certificate commitment")
 	}
-	plan.Outputs[index].Script = certificateScript(digest)
+	plan.Outputs[index].Script = certificateScriptVersion(digest, version)
 	length := len(plan.ScriptPrefix) + plan.ExtraNonce1Size + plan.ExtraNonce2Size + len(plan.ScriptSuffix)
 	plan.Coinb1, plan.Coinb2 = plan.baseSplit(length)
 	return &plan, nil
@@ -120,30 +141,30 @@ func buildV4CoinbasePlan(tpl ParentTemplate, commitment, payout []byte, extra1, 
 }
 
 func (j *DigibyteJob) BindCertificate(t MultiTemplate, signatures [][]byte) error {
-	if j.ProtocolVersion != 4 || t.Version != 4 {
+	if (j.ProtocolVersion != 4 && j.ProtocolVersion != 5) || t.Version != j.ProtocolVersion {
 		return errors.New("certificate requires a V4 parent job")
 	}
 	rebuilt, err := j.MultiTemplate(t.ValidFrom, t.Expires)
 	if err != nil || !MultiTemplatesEqual(rebuilt, t) {
 		return errors.New("certificate does not match parent template")
 	}
-	digest, err := MultiCertificateDigest(t, common.BytesToHash(j.OGGLeaf[:]), signatures)
+	digest, err := MultiCertificateDigest(t, j.certificateWork(), signatures)
 	if err != nil {
 		return err
 	}
-	j.Coinbase, err = certificatePlan(j.Coinbase, digest)
+	j.Coinbase, err = certificatePlanVersion(j.Coinbase, digest, j.ProtocolVersion)
 	return err
 }
 
 func (j *DigibyteJob) CheckCertificate(t MultiTemplate, signatures [][]byte) error {
-	if j.ProtocolVersion != 4 || t.Version != 4 {
+	if (j.ProtocolVersion != 4 && j.ProtocolVersion != 5) || t.Version != j.ProtocolVersion {
 		return errors.New("certificate requires a V4 parent job")
 	}
-	digest, err := MultiCertificateDigest(t, common.BytesToHash(j.OGGLeaf[:]), signatures)
+	digest, err := MultiCertificateDigest(t, j.certificateWork(), signatures)
 	if err != nil {
 		return err
 	}
-	want, err := certificatePlan(j.Coinbase, digest)
+	want, err := certificatePlanVersion(j.Coinbase, digest, j.ProtocolVersion)
 	if err != nil || !bytes.Equal(want.Coinb1, j.Coinbase.Coinb1) || !bytes.Equal(want.Coinb2, j.Coinbase.Coinb2) {
 		return errors.New("parent is not bound to the supplied certificate")
 	}
@@ -154,7 +175,7 @@ func (j *DigibyteJob) CheckCertificate(t MultiTemplate, signatures [][]byte) err
 // committed to mining work. Signature authorization is checked separately.
 func CanonicalMultiSignatures(t MultiTemplate, work common.Hash, signatures [][]byte) ([][]byte, error) {
 	digest, err := MultiDigest(t, work)
-	if err != nil || t.Version != 4 || len(signatures) == 0 || len(signatures) > MaxTemplateSigners {
+	if err != nil || (t.Version != 4 && t.Version != 5) || len(signatures) == 0 || len(signatures) > MaxTemplateSigners {
 		return nil, errors.New("invalid certificate signature set")
 	}
 	type signed struct {
@@ -184,4 +205,29 @@ func CanonicalMultiSignatures(t MultiTemplate, work common.Hash, signatures [][]
 		out[i] = items[i].signature
 	}
 	return out, nil
+}
+
+// certificateWork is the raw RGN leaf for V4 and the registry-bound leaf for V5.
+func (j *DigibyteJob) certificateWork() common.Hash {
+	if j.ProtocolVersion == 5 {
+		return j.CertificateWork
+	}
+	return common.BytesToHash(j.OGGLeaf[:])
+}
+
+// BuildMultiParentV5 admits bounded registered AuxPoW identities. Registry
+// authorization and its signature binding are validated before publishing work.
+func BuildMultiParentV5(tpl ParentTemplate, work string, aux map[uint32]*DogeCandidate, script []byte, nonce uint32, extra1, extra2 int, dgb bool) (*DigibyteJob, error) {
+	job, err := buildMultiParent(tpl, work, aux, script, nonce, extra1, extra2, dgb, true)
+	if err != nil {
+		return nil, err
+	}
+	job.Coinbase, err = buildV4CoinbasePlan(tpl, job.Commitment, script, extra1, extra2)
+	if err != nil {
+		return nil, err
+	}
+	job.ProtocolVersion = 5
+	job.Coinbase.Outputs = append(job.Coinbase.Outputs, TxOutput{Value: 0, Script: certificateScriptVersion(common.Hash{}, 5)})
+	job.Coinbase, err = certificatePlanVersion(job.Coinbase, common.Hash{}, 5)
+	return job, err
 }

@@ -74,7 +74,12 @@ func TestMultiV3NativeSharedParent(t *testing.T) {
 	scripts := map[string]string{"DGB": hex.EncodeToString(dgbScript), "DOGE": hex.EncodeToString(dogeScript), "PEP": "76a914bb0ff0797074c03e9969359b605997b53c9eaa8488ac", "DINGO": "76a914e306e2a1a240f634da707d31079f18431317d7af88ac", "BELLS": "0014088a288ee425094ccd67779afd0c2016d010368c"}
 	extra := map[uint32]*forgepool.DogeCandidate{}
 	ids["DOGE"] = 98
-	for symbol,client:=range clients {script,_:=hex.DecodeString(scripts[symbol]);if e:=client.CheckTreasuryProposal(context.Background(),templates[symbol],script,ids[symbol]);e!=nil{t.Fatal(symbol,"independent treasury eligibility proposal",e)}}
+	for symbol, client := range clients {
+		script, _ := hex.DecodeString(scripts[symbol])
+		if e := client.CheckTreasuryProposal(context.Background(), templates[symbol], script, ids[symbol]); e != nil {
+			t.Fatal(symbol, "independent treasury eligibility proposal", e)
+		}
+	}
 	for symbol, id := range ids {
 		script, _ := hex.DecodeString(scripts[symbol])
 		extra[id], err = forgepool.BuildAuxCandidate(templates[symbol], script, 17, id)

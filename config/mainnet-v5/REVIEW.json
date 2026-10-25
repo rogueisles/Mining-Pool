@@ -1,0 +1,59 @@
+{
+  "format": "rgn-forge-v5-public-profile-v1",
+  "inputs": {
+    "expectedBaseSHA256": "b983ee4de13fb37ad68cfe3807d902955b969b32f2d7604310be07bc3ff38323",
+    "activationHeight": 1121800,
+    "observedHeadHeight": 1107516,
+    "observedHeadHash": "0xcb0f9728d1135d14c19167676262241fdf99f06481ddcf341e38f113fb1c1c41",
+    "observationUTC": "2026-10-25T13:51:44.344783Z",
+    "intendedActivationUTC": "2026-10-27T13:31:55Z",
+    "observedMeanBlockMillis": "12025.8",
+    "administratorAddresses": [
+      "0x0B067cD7C5bbEdBa18A6b2D3f2Af0dB140d4eFE5",
+      "0x4829a5cd31FF288B116653f29c341746f329Dc73",
+      "0x7c3db6ABadB5Be02604beb465160E54E485354dB",
+      "0x97c2C2AA585D871B21598BCCfa56034cC0Aa6E49"
+    ],
+    "administratorQuorum": 3,
+    "soqAddress": "sq1ptk79z875zygp72awur73j9zk332r0vqkjwcsp3mcdg73nqyuwktq87gczj",
+    "soqScript": "51205dbc511fd411101f2baee0fd1914568c5437b01693b100c7786a3d19809c7596"
+  },
+  "baseCanonicalConfigSHA256": "8c4af795cc8965ec55601e5c508da93544983bc87602aa0c91cd0070984aa7f2",
+  "scheduledCanonicalConfigSHA256": "ca9afe4a8f9aab35eaaed1432ce277d133c99c6efa463cc570bedd1117935adf",
+  "chainId": 70088,
+  "genesisHash": "0xdc4d38c0ef41d3fdf50642fdf5fc99e221eadd09e73bbe616724f55a136270ab",
+  "leadBlocks": 14284,
+  "estimatedActivationUTCAtObservedMean": "2026-10-27T13:34:40.871983Z",
+  "registryRoot": "0xeb4a842a5a0d3243baf0fd230486486b492129abc411dad5a18cb5c647bac085",
+  "bootstrapBytes": 437,
+  "soqScriptSHA256": "e75c0bf78649f96f356b229dff25458a86d9b4977d13c09451dd195839d47427",
+  "unchangedMiningWorkSigners": [
+    "0xb00127ba6f96b6bbb32c96a8f74de40b1de1de30",
+    "0xd8dbe2efb89f2873986bce6d826aa6f417c5cb03",
+    "0x27f0e3e0060bb18fe4edc0059f67ae568aefdce3",
+    "0x282390aad1587182d2ecd852f923267d58c4fc14"
+  ],
+  "offlineChecksPassed": [
+    "reviewed current profile checksum",
+    "unchanged mainnet genesis and every historical setting",
+    "initial DGB/DOGE treasury commitments preserved",
+    "SOQ Bech32m address/raw-script agreement",
+    "separate sorted majority administrator public keys",
+    "actual registry RLP/root and full engine validation",
+    "pre-activation scheduling preserves stored head",
+    "active removal/change fails closed without rewind"
+  ],
+  "remainingProductionGates": [
+    "Production administrator custody and public keys must be explicitly approved; this tool creates no keys.",
+    "Refresh the canonical observed head and validator inventory before rollout; supplied observations are not verified by an offline tool.",
+    "Confirm the intended ~48-hour notice, distribute one exact profile checksum, and obtain all validator/exchange/pool/signer readiness.",
+    "Build/pin a scheduled-profile Docker payload; the frozen unscheduled image pins its existing profile checksum.",
+    "Review native treasury control and public script mappings independently; no native spending authority is proved here.",
+    "Deployment, publication, service restarts and mainnet activation are separate actions; this tool performs none."
+  ],
+  "artifactSHA256": {
+    "REGISTRY-BOOTSTRAP.json": "8190031aad212915d544de93680f62de539f575d10454be42ac1cdf43c534108",
+    "REGISTRY-BOOTSTRAP.rlp": "21c9cb3f42c74b017924290189342afaf4615714c4063aff38285a2e92928c2b",
+    "RGN-mainnet-V5-scheduled.json": "87c66819311b112adce09855f9c2c38490fb32a193ea35ca7c466892319aefd8"
+  }
+}

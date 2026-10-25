@@ -36,16 +36,28 @@ func TestDGBNativeMergedParentAcceptance(t *testing.T) {
 	}
 	script, _ := hex.DecodeString("76a914f5c5536dd8df8e22ccfa6c366e54e4a28a6485fe88ac")
 	// A real two-leaf auxiliary commitment is carried by the submitted DGB block.
-	dogeTpl:=forgepool.ParentTemplate{Version:1,Previous:parent.Previous,Height:200,CurTime:parent.CurTime,Bits:0x207fffff,CoinbaseValue:1000000000000}
+	dogeTpl := forgepool.ParentTemplate{Version: 1, Previous: parent.Previous, Height: 200, CurTime: parent.CurTime, Bits: 0x207fffff, CoinbaseValue: 1000000000000}
 	var dogeRPC *RPCClient
-	if dogeURL:=os.Getenv("D13_DOGE_REGTEST_RPC");dogeURL!="" {
-		dogeRPC=NewRPCClient("D13-DOGE-regtest",dogeURL,"5s","test","test-only")
-		res,e:=dogeRPC.doPost(dogeURL,"getblockchaininfo",[]interface{}{});if e!=nil {t.Fatal(e)}
-		var chain struct{Chain string};if unmarshalRPCResult(res,&chain)!=nil || chain.Chain!="regtest" {t.Fatal("refusing DOGE mainnet submission")}
-		dt,e:=dogeRPC.GetDogecoinBlockTemplate();if e!=nil {t.Fatal(e)}
-		dogeTpl,e=dt.ToParentTemplate();if e!=nil {t.Fatal(e)}
+	if dogeURL := os.Getenv("D13_DOGE_REGTEST_RPC"); dogeURL != "" {
+		dogeRPC = NewRPCClient("D13-DOGE-regtest", dogeURL, "5s", "test", "test-only")
+		res, e := dogeRPC.doPost(dogeURL, "getblockchaininfo", []interface{}{})
+		if e != nil {
+			t.Fatal(e)
+		}
+		var chain struct{ Chain string }
+		if unmarshalRPCResult(res, &chain) != nil || chain.Chain != "regtest" {
+			t.Fatal("refusing DOGE mainnet submission")
+		}
+		dt, e := dogeRPC.GetDogecoinBlockTemplate()
+		if e != nil {
+			t.Fatal(e)
+		}
+		dogeTpl, e = dt.ToParentTemplate()
+		if e != nil {
+			t.Fatal(e)
+		}
 	}
-	dogeScript,_:=hex.DecodeString("76a914407041d76ae66ed29e46e7c887d2bce9cc61484388ac")
+	dogeScript, _ := hex.DecodeString("76a914407041d76ae66ed29e46e7c887d2bce9cc61484388ac")
 	doge, err := forgepool.BuildDogeCandidate(dogeTpl, dogeScript, 17)
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +80,10 @@ func TestDGBNativeMergedParentAcceptance(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		dogeHit,e:=forgepool.MeetsCompactTarget(raw,doge.Bits);if e!=nil {t.Fatal(e)}
+		dogeHit, e := forgepool.MeetsCompactTarget(raw, doge.Bits)
+		if e != nil {
+			t.Fatal(e)
+		}
 		if forgepool.HashValue(raw).Cmp(target) <= 0 && dogeHit {
 			break
 		}
@@ -121,13 +136,27 @@ func TestDGBNativeMergedParentAcceptance(t *testing.T) {
 	if !found {
 		t.Fatal("native DGB coinbase did not pay configured treasury script")
 	}
-	if dogeRPC!=nil {
-		dogeBlock,e:=job.DogeAuxPowBlock(make([]byte,4),make([]byte,4),parent.CurTime,nonce);if e!=nil {t.Fatal(e)}
-		ok,e:=dogeRPC.SubmitRawBlock(hex.EncodeToString(dogeBlock));if e!=nil || !ok {t.Fatalf("DOGE accept=%v error=%v",ok,e)}
-		res,e:=dogeRPC.doPost(dogeRPC.Url,"getblockchaininfo",[]interface{}{});if e!=nil {t.Fatal(e)}
-		var dh struct{Blocks int64;BestBlockHash string `json:"bestblockhash"`}
-		if unmarshalRPCResult(res,&dh)!=nil || dh.Blocks!=doge.Template.Height || dh.BestBlockHash!=doge.DisplayHash {t.Fatal("DOGE AuxPoW did not become canonical")}
-		t.Logf("same native DGB parent work also accepted by Dogecoin at height %d hash %s; regtest only",dh.Blocks,dh.BestBlockHash)
+	if dogeRPC != nil {
+		dogeBlock, e := job.DogeAuxPowBlock(make([]byte, 4), make([]byte, 4), parent.CurTime, nonce)
+		if e != nil {
+			t.Fatal(e)
+		}
+		ok, e := dogeRPC.SubmitRawBlock(hex.EncodeToString(dogeBlock))
+		if e != nil || !ok {
+			t.Fatalf("DOGE accept=%v error=%v", ok, e)
+		}
+		res, e := dogeRPC.doPost(dogeRPC.Url, "getblockchaininfo", []interface{}{})
+		if e != nil {
+			t.Fatal(e)
+		}
+		var dh struct {
+			Blocks        int64
+			BestBlockHash string `json:"bestblockhash"`
+		}
+		if unmarshalRPCResult(res, &dh) != nil || dh.Blocks != doge.Template.Height || dh.BestBlockHash != doge.DisplayHash {
+			t.Fatal("DOGE AuxPoW did not become canonical")
+		}
+		t.Logf("same native DGB parent work also accepted by Dogecoin at height %d hash %s; regtest only", dh.Blocks, dh.BestBlockHash)
 	}
 	t.Logf("native DigiByte accepted DGB+DOGE+OGG commitment block at height %d, hash %s; regtest only", after.Blocks, after.BestBlockHash)
 }

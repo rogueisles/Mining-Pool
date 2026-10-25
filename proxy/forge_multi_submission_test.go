@@ -85,7 +85,7 @@ func TestV4BoundIntentLostRepliesRestartWithoutDuplicateCredit(t *testing.T) {
 func TestMultiAuxAccountingStatusIncludesEveryChain(t *testing.T) {
 	f := newIntentFixture(t)
 	status := f.s.forge.account.status(time.Now())
-	if len(status.UnresolvedChains) != 6 || len(status.NoncanonicalChains) != 5 {
+	if len(status.UnresolvedChains) != 7 || len(status.NoncanonicalChains) != 6 {
 		t.Fatal("missing auxiliary chain in admission status")
 	}
 	if path := os.Getenv("FORGE_MULTI_ACCOUNTING_STATUS_FIXTURE"); path != "" {

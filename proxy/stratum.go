@@ -164,7 +164,7 @@ func (cs *Session) sendTCPResult(id json.RawMessage, result interface{}) error {
 func (cs *Session) pushNewJob(result interface{}) error {
 	cs.Lock()
 	defer cs.Unlock()
-	// FIXME: Temporarily add ID for Claymore compliance
+	// Preserve the numeric notification ID required by legacy Claymore clients.
 	message := JSONPushMessage{Version: "2.0", Result: result, Id: 0}
 	return cs.enc.Encode(&message)
 }

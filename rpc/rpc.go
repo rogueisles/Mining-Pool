@@ -258,7 +258,8 @@ func (r *RPCClient) doPost(url string, method string, params interface{}) (*JSON
 	data, _ := json.Marshal(jsonReq)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(data))
-	req.Header.Set("Content-Length", (string)(len(data)))
+	// NewRequest sets the byte length from the body. Converting the count to
+	// string produces a Unicode rune and rejects some SOQ-address requests.
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
 

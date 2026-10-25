@@ -82,6 +82,10 @@ func TestForgeAccountingByteLimitAndAgePreserveRecords(t *testing.T) {
 	}
 	third := r
 	third.ID = fmt.Sprintf("%064x", 3)
+	// Resolved admission records can be smaller than a frozen credit record.
+	// Set the boundary from actual retained bytes and the next admission's
+	// conservative reservation rather than relying on an internal rewrite.
+	q.limits.MaxPendingBytes = q.pendingBytes + int64(len(blob)) - 1
 	if _, err := q.enqueue(third); !errors.Is(err, errForgeBackpressure) {
 		t.Fatal("bytes cap bypassed", err)
 	}
