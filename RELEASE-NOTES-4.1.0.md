@@ -28,8 +28,11 @@ scheduled mainnet profile before activation. Preserve the existing data director
 and wallet custody. All validating nodes need this initial upgrade, including
 nodes that do not mine. A pool-only update is insufficient.
 
-**Pool operators:** also update the adapter, work signers, exact-profile safety
-gates, readiness checks and health display. Keep native RPC/payment credentials
+**Pool operators:** upgrade both mining and any separately run block-unlocker
+service to **4.1.0 before block 1,121,800**. Both roles use `rgn-pool`; update each
+service's executable path while preserving its configuration and accounting.
+Also update work signers, exact-profile safety gates, readiness checks and health
+display. Keep native RPC/payment credentials
 private. DGB/DOGE treasury commitments are preserved; verify any SOQ endpoint and
 the approved SOQ receiving script before enabling it. See the complete integration
 guide in Mining-Pool.

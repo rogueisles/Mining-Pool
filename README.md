@@ -35,16 +35,24 @@ rgn-pool /etc/rgn-pool/mining.json
 
 ## Upgrade an existing pool
 
-Download, verify and extract the archive before installing binaries. Update the existing runtime
-configuration for V5, retaining the Redis namespace, accounting journal,
-beneficiary and payment settings. Use your installed service names and binary
-paths; this example uses `/usr/local/bin`:
+Before block **1,121,800**, upgrade both the mining service and any separately
+run **block-unlocker service** to **4.1.0**. Both roles use `rgn-pool`; update each
+service's executable path if they use separate copies.
+
+Download, verify and extract the archive first. Update the mining configuration
+for V5 while retaining each service's configuration, Redis namespace, accounting
+journal, beneficiary and payment settings. Use your installed service names and
+binary paths; this example uses `/usr/local/bin`. If a supervisor automatically
+restarts these workers, use its maintenance mode during replacement.
 
 ```sh
-sudo systemctl stop rgn-pool.service
+sudo systemctl stop rgn-pool.service rgn-pool-unlocker.service
 sudo install -m 755 rgn-pool /usr/local/bin/rgn-pool
-sudo systemctl start rgn-pool.service
+sudo systemctl start rgn-pool-unlocker.service rgn-pool.service
 ```
+
+Confirm both services are running the 4.1.0 executable and that block unlocking,
+accepted shares and accounting continue normally.
 
 Roll work signers one at a time while keeping the signing quorum available:
 
